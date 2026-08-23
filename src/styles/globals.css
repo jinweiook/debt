@@ -1,0 +1,160 @@
+@import "tailwindcss";
+
+@theme {
+  /* ===== 色板：暗色科技感 ===== */
+  --color-bg: #070b14;
+  --color-surface: #0e1526;
+  --color-surface-2: #131c33;
+  --color-border: rgb(148 163 184 / 0.12);
+  --color-accent: #00e5ff;
+  --color-accent-2: #a855f7;
+  --color-text: #e6edf7;
+  --color-text-dim: #8b9bb4;
+  --color-success: #34d399;
+  --color-warning: #fbbf24;
+  --color-danger: #f43f5e;
+
+  /* ===== 字体 ===== */
+  --font-sans: "Inter", "PingFang SC", "Noto Sans SC", system-ui, -apple-system, sans-serif;
+
+  /* ===== 阴影 / 发光 ===== */
+  --shadow-card: 0 8px 32px rgb(0 0 0 / 0.45);
+  --shadow-glow: 0 0 24px rgb(0 229 255 / 0.22);
+  --shadow-glow-2: 0 0 32px rgb(168 85 247 / 0.25);
+
+  /* ===== 圆角 ===== */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+
+  /* ===== 动效 ===== */
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  min-height: 100dvh;
+}
+
+/* 背景氛围：双色径向渐变光晕 */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(600px 400px at 15% -5%, rgb(0 229 255 / 0.07), transparent 60%),
+    radial-gradient(700px 500px at 90% 10%, rgb(168 85 247 / 0.08), transparent 60%),
+    radial-gradient(500px 400px at 50% 110%, rgb(0 229 255 / 0.04), transparent 60%);
+  pointer-events: none;
+}
+
+/* 数字等宽 */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 品牌渐变 */
+.gradient-brand {
+  background: linear-gradient(135deg, #00e5ff 0%, #a855f7 100%);
+}
+.gradient-card {
+  background: linear-gradient(160deg, rgb(0 229 255 / 0.06), rgb(168 85 247 / 0.06));
+}
+.gradient-text {
+  background: linear-gradient(135deg, #00e5ff 0%, #a855f7 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* 毛玻璃卡片 */
+.glass {
+  background: rgb(14 21 38 / 0.7);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgb(255 255 255 / 0.08);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+}
+
+/* 通用过渡 */
+.transition-base {
+  transition: all 200ms var(--ease-out);
+}
+.transition-fast {
+  transition: all 150ms var(--ease-out);
+}
+
+/* 卡片 hover 浮起 + 发光 */
+.card-hover {
+  transition: transform 200ms var(--ease-out), box-shadow 200ms var(--ease-out);
+}
+.card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card), var(--shadow-glow);
+}
+
+/* 滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(148 163 184 / 0.2);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 数字输入框去箭头（金额输入更干净） */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* Toast 进入动画 */
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.toast-in {
+  animation: toast-in 200ms var(--ease-out);
+}
+
+/* 骨架屏呼吸 */
+@keyframes shimmer {
+  0% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.5;
+  }
+}
+.skeleton {
+  animation: shimmer 1.6s ease-in-out infinite;
+  background: var(--color-surface-2);
+  border-radius: var(--radius-sm);
+}

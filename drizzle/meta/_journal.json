@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "mysql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1786858979278,
+      "tag": "0000_great_malcolm_colcord",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1787371700086,
+      "tag": "0001_aromatic_mach_iv",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1787381753720,
+      "tag": "0002_slim_caretaker",
+      "breakpoints": true
+    }
+  ]
+}
