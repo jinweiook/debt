@@ -2,7 +2,7 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/server/db/client";
 import { advances, debtAccounts, installmentBills, persons, repayments } from "@/server/db/schema";
 import { currentMonth, addMonths, monthOf } from "@/server/lib/dates";
-import { getOrSet, invalidateCache } from "@/server/redis/cache";
+import { getOrSet, invalidateNamespace } from "@/server/redis/cache";
 import { virtualAccruedInterest } from "./interest-service";
 
 export interface PersonStats {
@@ -63,14 +63,15 @@ export async function personStats(personId: number): Promise<PersonStats> {
   };
 }
 
-/** 全站总览（带 Redis 缓存） */
-export async function overviewStats(): Promise<PersonStats & { activePersons: number }> {
+/** 全站总览（带 Redis 缓存，按客户隔离：ownerId=null 表示管理员汇总全部） */
+export async function overviewStats(ownerId: number | null): Promise<PersonStats & { activePersons: number }> {
   return getOrSet(
     "stats",
-    "overview",
+    `overview:${ownerId == null ? "admin" : `u${ownerId}`}`,
     async () => {
       const db = getDb();
-      const allPersons = await db.select().from(persons).where(eq(persons.status, "active"));
+      const where = ownerId == null ? eq(persons.status, "active") : and(eq(persons.status, "active"), eq(persons.ownerUserId, ownerId));
+      const allPersons = await db.select().from(persons).where(where);
       const stats = await Promise.all(allPersons.map((p) => personStats(p.id)));
       const sum = (k: keyof PersonStats) => stats.reduce((s, x) => s + (x[k] as number), 0);
       return {
@@ -87,8 +88,8 @@ export async function overviewStats(): Promise<PersonStats & { activePersons: nu
   );
 }
 
-/** 未来每月预计应收（暂不做缓存，因数据量不大且实时性要求较高） */
-export async function monthlyForecast(personId: number | null, months = 12): Promise<MonthlyForecast[]> {
+/** 未来每月预计应收（暂不做缓存，因数据量不大且实时性要求较高）。personId=null 时按客户维度过滤 */
+export async function monthlyForecast(personId: number | null, months = 12, ownerId: number | null = null): Promise<MonthlyForecast[]> {
   const db = getDb();
   let accountIds: number[] = [];
   if (personId != null) {
@@ -96,6 +97,14 @@ export async function monthlyForecast(personId: number | null, months = 12): Pro
       .select()
       .from(debtAccounts)
       .where(and(eq(debtAccounts.personId, personId), eq(debtAccounts.type, "installment")));
+    accountIds = accounts.map((a) => a.id);
+  } else if (ownerId != null) {
+    // 普通客户：仅统计自己名下分期账户
+    const accounts = await db
+      .select({ id: debtAccounts.id })
+      .from(debtAccounts)
+      .innerJoin(persons, eq(debtAccounts.personId, persons.id))
+      .where(and(eq(persons.ownerUserId, ownerId), eq(debtAccounts.type, "installment")));
     accountIds = accounts.map((a) => a.id);
   } else {
     const accounts = await db.select().from(debtAccounts).where(eq(debtAccounts.type, "installment"));
@@ -123,7 +132,7 @@ export async function monthlyForecast(personId: number | null, months = 12): Pro
   return [...buckets.entries()].map(([month, amountCents]) => ({ month, amountCents }));
 }
 
-/** 手动清理总览缓存（可在写操作后调用） */
+/** 手动清理总览缓存（可在写操作后调用）。key 含客户维度，直接按 namespace 清 */
 export async function invalidateOverviewStats(): Promise<void> {
-  await invalidateCache("stats", "overview");
+  await invalidateNamespace("stats");
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, Suspense } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -63,7 +64,12 @@ function LoginForm() {
       <Button type="submit" className="w-full" size="lg" loading={loading}>
         登录
       </Button>
-      <p className="text-xs text-text-dim text-center">默认账号 admin，首次使用请初始化数据库</p>
+      <p className="text-xs text-text-dim text-center">
+        还没有账号？
+        <Link href="/register" className="text-accent hover:underline ml-1">
+          注册客户账号
+        </Link>
+      </p>
     </form>
   );
 }

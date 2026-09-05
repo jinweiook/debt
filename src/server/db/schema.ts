@@ -22,6 +22,8 @@ export const persons = mysqlTable(
   "persons",
   {
     id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    // 归属客户（users.id）；数据隔离维度：客户只能看到自己名下欠款人的账单
+    ownerUserId: bigint("owner_user_id", { mode: "number", unsigned: true }).notNull(),
     name: varchar("name", { length: 64 }).notNull(),
     note: varchar("note", { length: 512 }),
     contact: varchar("contact", { length: 128 }),
@@ -30,7 +32,7 @@ export const persons = mysqlTable(
     createdAt: datetime("created_at", { mode: "date", fsp: 3 }).notNull().default(new Date()),
     updatedAt: datetime("updated_at", { mode: "date", fsp: 3 }).notNull().default(new Date()),
   },
-  (t) => [index("idx_persons_status").on(t.status)],
+  (t) => [index("idx_persons_owner").on(t.ownerUserId, t.status), index("idx_persons_status").on(t.status)],
 );
 
 export const debtAccounts = mysqlTable(
@@ -139,12 +141,38 @@ export const users = mysqlTable(
     id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
     username: varchar("username", { length: 64 }).notNull(),
     passwordHash: varchar("password_hash", { length: 255 }).notNull(),
-    role: varchar("role", { length: 16 }).notNull().default("admin"),
+    // admin = 管理员（可查看所有客户账单）；user = 注册客户（只能查看自己的账单）
+    role: varchar("role", { length: 16 }).notNull().default("user"),
     status: varchar("status", { length: 16 }).notNull().default("active"), // active / disabled
     createdAt: datetime("created_at", { mode: "date", fsp: 3 }).notNull().default(new Date()),
     updatedAt: datetime("updated_at", { mode: "date", fsp: 3 }).notNull().default(new Date()),
   },
   (t) => [uniqueIndex("uk_users_username").on(t.username), index("idx_users_status").on(t.status)],
+);
+
+export const sessions = mysqlTable(
+  "sessions",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    userId: bigint("user_id", { mode: "number", unsigned: true }).notNull(),
+    createdAt: datetime("created_at", { mode: "date", fsp: 3 }).notNull().default(new Date()),
+    expiresAt: datetime("expires_at", { mode: "date", fsp: 3 }).notNull(),
+    lastSeenAt: datetime("last_seen_at", { mode: "date", fsp: 3 }).notNull().default(new Date()),
+  },
+  (t) => [
+    index("idx_sessions_user").on(t.userId),
+    index("idx_sessions_expires").on(t.expiresAt),
+  ],
+);
+
+export const loginAttempts = mysqlTable(
+  "login_attempts",
+  {
+    username: varchar("username", { length: 64 }).primaryKey(),
+    failCount: int("fail_count").notNull().default(0),
+    lockedUntil: datetime("locked_until", { mode: "date", fsp: 3 }),
+    updatedAt: datetime("updated_at", { mode: "date", fsp: 3 }).notNull().default(new Date()),
+  },
 );
 
 export type Person = typeof persons.$inferSelect;

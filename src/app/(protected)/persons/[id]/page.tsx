@@ -15,6 +15,7 @@ import { getPerson } from "@/server/services/person-service";
 import { personStats, monthlyForecast } from "@/server/services/stats-service";
 import { virtualAccruedInterest } from "@/server/services/interest-service";
 import { listRepaymentsByPerson } from "@/server/services/repayment-service";
+import { getAuthContext } from "@/server/lib/auth-context";
 import { getDb } from "@/server/db/client";
 import { debtAccounts, installmentBills } from "@/server/db/schema";
 import { and, asc, eq } from "drizzle-orm";
@@ -27,9 +28,13 @@ export default async function PersonDetailPage({ params }: { params: Promise<{ i
   const personId = Number(id);
   if (!Number.isInteger(personId) || personId <= 0) notFound();
 
+  // 归属校验：普通客户访问他人欠款人 → 404；管理员可查看任意客户的账单
+  const auth = await getAuthContext();
+  if (!auth) notFound();
+
   let person;
   try {
-    person = await getPerson(personId);
+    person = await getPerson(personId, auth.ownerId);
   } catch {
     notFound();
   }

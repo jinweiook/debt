@@ -4,18 +4,19 @@ import { revalidatePath } from "next/cache";
 import { createInstallmentDebt, updateBill } from "@/server/services/installment-service";
 import { createPersonalDebt, closePersonalDebt } from "@/server/services/personal-debt-service";
 import { invalidateOverviewStats } from "@/server/services/stats-service";
-import { invalidateCache } from "@/server/redis/cache";
+import { invalidateNamespace } from "@/server/redis/cache";
+import { requireAuth } from "@/server/lib/auth-context";
 import { toActionError, type ActionResult } from "@/server/lib/errors";
 
 async function clearStatsCache() {
   await invalidateOverviewStats();
-  await invalidateCache("persons:list", "all");
-  await invalidateCache("persons:list", "active");
+  await invalidateNamespace("persons:list");
 }
 
 export async function createInstallmentDebtAction(input: unknown): Promise<ActionResult<{ accountId: number; personId: number }>> {
   try {
-    const accountId = await createInstallmentDebt(input as never);
+    const auth = await requireAuth();
+    const accountId = await createInstallmentDebt(input as never, auth.ownerId);
     const personId = (input as { personId: number }).personId;
     await clearStatsCache();
     revalidatePath("/");
@@ -32,7 +33,8 @@ export async function updateBillAction(
   patch: { dueDate?: string; principalCents?: number; interestCents?: number; note?: string },
 ): Promise<ActionResult<null>> {
   try {
-    await updateBill(billId, patch);
+    const auth = await requireAuth();
+    await updateBill(billId, patch, auth.ownerId);
     await clearStatsCache();
     revalidatePath(`/persons/${personId}`);
     revalidatePath("/");
@@ -44,7 +46,8 @@ export async function updateBillAction(
 
 export async function createPersonalDebtAction(input: unknown): Promise<ActionResult<{ accountId: number; personId: number }>> {
   try {
-    const accountId = await createPersonalDebt(input as never);
+    const auth = await requireAuth();
+    const accountId = await createPersonalDebt(input as never, auth.ownerId);
     const personId = (input as { personId: number }).personId;
     await clearStatsCache();
     revalidatePath("/");
@@ -57,7 +60,8 @@ export async function createPersonalDebtAction(input: unknown): Promise<ActionRe
 
 export async function closePersonalDebtAction(accountId: number, personId: number): Promise<ActionResult<null>> {
   try {
-    await closePersonalDebt(accountId);
+    const auth = await requireAuth();
+    await closePersonalDebt(accountId, auth.ownerId);
     await clearStatsCache();
     revalidatePath(`/persons/${personId}`);
     revalidatePath("/");

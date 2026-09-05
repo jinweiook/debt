@@ -3,7 +3,7 @@ import { SESSION_COOKIE } from "@/lib/auth-cookie";
 
 /**
  * 登录拦截（Edge Runtime 安全）：
- * - 只做「是否携带 session cookie」的粗判断，不触碰 Redis/MySQL（Edge 上无 Node 原生模块）
+ * - 只做「是否携带 session cookie」的粗判断，不触碰 MySQL（Edge 上无 Node 原生模块）
  * - 真正的 session 有效性校验由 (protected)/layout.tsx 在 Node Runtime 完成
  * - /api/health、/api/auth/* 保持公开
  */
@@ -17,7 +17,7 @@ export async function middleware(req: NextRequest) {
 
   const hasSessionCookie = !!req.cookies.get(SESSION_COOKIE)?.value;
 
-  if (pathname.startsWith("/login")) {
+  if (pathname.startsWith("/login") || pathname.startsWith("/register")) {
     // 携带 cookie 时先放行到登录页，由页面层判断是否有效；无效仍停留在登录页
     if (hasSessionCookie) {
       return NextResponse.redirect(new URL("/", req.url));

@@ -15,42 +15,63 @@ export type PersonInput = z.infer<typeof personInputSchema>;
 
 const CACHE_TTL = 60; // 秒
 
-export async function listPersons(includeArchived = false) {
-  const cacheKey = includeArchived ? "all" : "active";
+/** 缓存作用域：admin 为 null → "admin"；普通客户 → "u{userId}" */
+export function ownerScope(ownerId: number | null): string {
+  return ownerId == null ? "admin" : `u${ownerId}`;
+}
+
+/**
+ * 按归属列出欠款人。
+ * @param ownerId 客户 id；null = 管理员，列出全部
+ */
+export async function listPersons(ownerId: number | null, includeArchived = false) {
+  const cacheKey = `${ownerScope(ownerId)}:${includeArchived ? "all" : "active"}`;
   return getOrSet(
     "persons:list",
     cacheKey,
     async () => {
       const db = getDb();
-      const rows = await db.select().from(persons).orderBy(desc(persons.createdAt));
+      const where = ownerId == null ? undefined : eq(persons.ownerUserId, ownerId);
+      const rows = await db
+        .select()
+        .from(persons)
+        .where(where)
+        .orderBy(desc(persons.createdAt));
       return includeArchived ? rows : rows.filter((p) => p.status === "active");
     },
     { ttlSeconds: CACHE_TTL },
   );
 }
 
-export async function getPerson(id: number) {
+/**
+ * 按 id 获取欠款人，并校验归属：
+ * - 普通客户只能访问自己名下的欠款人，否则视为不存在（避免枚举探测）
+ * - 管理员（ownerId=null）可访问任意欠款人
+ */
+export async function getPerson(id: number, ownerId: number | null) {
   const db = getDb();
   const [row] = await db.select().from(persons).where(eq(persons.id, id)).limit(1);
   if (!row) throw new NotFoundError("欠款人不存在");
+  if (ownerId != null && row.ownerUserId !== ownerId) throw new NotFoundError("欠款人不存在");
   return row;
 }
 
-export async function createPerson(input: PersonInput) {
+export async function createPerson(input: PersonInput, ownerId: number) {
   const db = getDb();
   const [r] = await db.insert(persons).values({
+    ownerUserId: ownerId,
     name: input.name,
     note: input.note || null,
     contact: input.contact || null,
     defaultRepayDay: input.defaultRepayDay ?? null,
   });
   await invalidatePersonsCache();
-  return getPerson(Number(r.insertId));
+  return getPerson(Number(r.insertId), null);
 }
 
-export async function updatePerson(id: number, input: PersonInput) {
+export async function updatePerson(id: number, input: PersonInput, ownerId: number | null) {
   const db = getDb();
-  await getPerson(id);
+  await getPerson(id, ownerId);
   await db
     .update(persons)
     .set({
@@ -62,17 +83,17 @@ export async function updatePerson(id: number, input: PersonInput) {
     })
     .where(eq(persons.id, id));
   await invalidatePersonsCache();
-  return getPerson(id);
+  return getPerson(id, ownerId);
 }
 
-export async function archivePerson(id: number) {
+export async function archivePerson(id: number, ownerId: number | null) {
   const db = getDb();
-  await getPerson(id);
+  await getPerson(id, ownerId);
   await db.update(persons).set({ status: "archived", updatedAt: new Date() }).where(eq(persons.id, id));
   await invalidatePersonsCache();
 }
 
-async function invalidatePersonsCache() {
+export async function invalidatePersonsCache() {
   await invalidateNamespace("persons:list");
-  await invalidateCache("stats", "overview");
+  await invalidateNamespace("stats");
 }

@@ -5,6 +5,12 @@ import { debtAccounts, installmentBills } from "@/server/db/schema";
 import { BusinessRuleError, NotFoundError, ValidationError } from "@/server/lib/errors";
 import { addMonthsToDate } from "@/server/lib/dates";
 import { monthlyInterestCents } from "@/server/lib/money";
+import { getPerson } from "./person-service";
+
+/** 校验 person 归属（ownerId=null 表示管理员不限制） */
+export async function assertPersonAccess(personId: number, ownerId: number | null) {
+  await getPerson(personId, ownerId);
+}
 
 /** 新增分期的逐期账单输入（金额单位：分） */
 export const billInputSchema = z.object({
@@ -140,9 +146,10 @@ export function generateDynamicBills(params: {
   return result;
 }
 
-/** 创建分期账户 + 全部账单（单事务） */
-export async function createInstallmentDebt(input: InstallmentInput) {
+/** 创建分期账户 + 全部账单（单事务）。先校验 person 归属。 */
+export async function createInstallmentDebt(input: InstallmentInput, ownerId: number | null) {
   const parsed = installmentInputSchema.parse(input);
+  await assertPersonAccess(parsed.personId, ownerId);
   const bills = [...parsed.bills].sort((a, b) => a.periodNo - b.periodNo);
 
   // 校验：期号连续
@@ -278,15 +285,19 @@ function computeEqualPrincipal(total: number, periodNo: number, term: number): n
   return periodNo === term ? base + remainder : base;
 }
 
-/** 逐期编辑（仅未还、未垫付账单可改） */
+/** 逐期编辑（仅未还、未垫付账单可改）。校验账单 → 账户 → 欠款人归属链。 */
 export async function updateBill(
   billId: number,
   patch: { dueDate?: string; principalCents?: number; interestCents?: number; note?: string },
+  ownerId: number | null,
 ) {
   const db = getDb();
   return db.transaction(async (tx) => {
     const [bill] = await tx.select().from(installmentBills).where(eq(installmentBills.id, billId)).limit(1);
     if (!bill) throw new NotFoundError("账单不存在");
+    const [account] = await tx.select().from(debtAccounts).where(eq(debtAccounts.id, bill.accountId)).limit(1);
+    if (!account) throw new NotFoundError("分期账户不存在");
+    await assertPersonAccess(account.personId, ownerId);
     if (bill.status !== "pending") throw new BusinessRuleError("已有还款或已垫付的账单不可修改");
 
     const principal = patch.principalCents ?? bill.principalCents;

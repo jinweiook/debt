@@ -23,8 +23,17 @@ async function main() {
   });
   const db = drizzle(pool, { schema, mode: "default" });
 
+  // 演示数据归属到管理员账号（users 表为空时先跑 npm run db:migrate）
+  const [adminUser] = await db.select({ id: schema.users.id }).from(schema.users).limit(1);
+  if (!adminUser) {
+    console.error("users 表为空，请先运行 npm run db:migrate 初始化账号");
+    process.exit(1);
+  }
+  const ownerId = adminUser.id;
+
   // 欠款人
   const [p1] = await db.insert(schema.persons).values({
+    ownerUserId: ownerId,
     name: "张三",
     contact: "138****0001",
     note: "大学同学",

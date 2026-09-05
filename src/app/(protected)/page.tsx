@@ -7,22 +7,38 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { listPersons } from "@/server/services/person-service";
 import { overviewStats, monthlyForecast, personStats } from "@/server/services/stats-service";
+import { getAuthContext } from "@/server/lib/auth-context";
+import { getDb } from "@/server/db/client";
+import { users } from "@/server/db/schema";
 
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
+  // 数据隔离：普通客户只看自己的账单；管理员（ownerId=null）看全部
+  const auth = await getAuthContext();
+  const ownerId = auth?.ownerId ?? null;
+  const isAdmin = !!auth?.isAdmin;
+
   const [persons, overview, forecast] = await Promise.all([
-    listPersons(),
-    overviewStats(),
-    monthlyForecast(null, 12),
+    listPersons(ownerId),
+    overviewStats(ownerId),
+    monthlyForecast(null, 12, ownerId),
   ]);
   const statsList = await Promise.all(persons.map((p) => personStats(p.id)));
+
+  // 管理员视图：补充每个欠款人的归属客户名
+  const ownerNames = new Map<number, string>();
+  if (isAdmin) {
+    const db = getDb();
+    const userRows = await db.select({ id: users.id, username: users.username }).from(users);
+    for (const u of userRows) ownerNames.set(u.id, u.username);
+  }
 
   return (
     <AppShell>
       <PageHeader
         title="总览"
-        description={`${overview.activePersons} 位欠款人 · 数据实时统计`}
+        description={`${overview.activePersons} 位欠款人${isAdmin ? " · 管理员视图（全部客户）" : " · 数据实时统计"}`}
         actions={
           <Link href="/persons/new">
             <Button size="md">+ 新增欠款人</Button>
@@ -56,7 +72,12 @@ export default async function HomePage() {
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
               {persons.map((p, i) => (
-                <PersonCard key={p.id} person={p} stats={statsList[i]} />
+                <PersonCard
+                  key={p.id}
+                  person={p}
+                  stats={statsList[i]}
+                  ownerName={isAdmin ? (ownerNames.get(p.ownerUserId) ?? `用户#${p.ownerUserId}`) : undefined}
+                />
               ))}
             </div>
           )}

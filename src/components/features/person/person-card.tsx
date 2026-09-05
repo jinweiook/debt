@@ -5,7 +5,16 @@ import { MoneyText } from "@/components/ui/money-text";
 import type { Person } from "@/server/db/schema";
 import type { PersonStats } from "@/server/services/stats-service";
 
-export function PersonCard({ person, stats }: { person: Person; stats: PersonStats }) {
+export function PersonCard({
+  person,
+  stats,
+  ownerName,
+}: {
+  person: Person;
+  stats: PersonStats;
+  /** 管理员视图下的归属客户名（普通客户不显示） */
+  ownerName?: string;
+}) {
   return (
     <Link href={`/persons/${person.id}`}>
       <Card hover className="h-full">
@@ -16,7 +25,7 @@ export function PersonCard({ person, stats }: { person: Person; stats: PersonSta
             </span>
             <div className="min-w-0">
               <p className="font-semibold truncate">{person.name}</p>
-              {person.note && <p className="text-xs text-text-dim truncate">{person.note}</p>}
+              {ownerName ? <p className="text-xs text-text-dim truncate">客户：{ownerName}</p> : person.note && <p className="text-xs text-text-dim truncate">{person.note}</p>}
             </div>
           </div>
           {stats.totalOutstanding <= 0 ? (

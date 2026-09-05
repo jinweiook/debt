@@ -7,7 +7,7 @@ import { BusinessRuleError, NotFoundError, ValidationError } from "@/server/lib/
 import { today } from "@/server/lib/dates";
 import { allocateRepayment, type Allocation, type SplitTarget } from "@/lib/repayment-split";
 import { accrueAccountInterest, interestPayable } from "./interest-service";
-import { recomputeDynamicBills } from "./installment-service";
+import { recomputeDynamicBills, assertPersonAccess } from "./installment-service";
 
 export const repaymentInputSchema = z.object({
   personId: z.number().int().positive(),
@@ -116,9 +116,10 @@ export async function buildOrderedTargets(
   return targets;
 }
 
-/** 预览分配（不写库） */
-export async function previewRepayment(input: RepaymentInput): Promise<Allocation> {
+/** 预览分配（不写库）。先校验 person 归属。 */
+export async function previewRepayment(input: RepaymentInput, ownerId: number | null): Promise<Allocation> {
   const parsed = repaymentInputSchema.parse(input);
+  await assertPersonAccess(parsed.personId, ownerId);
   const db = getDb();
   // annual 账户先真实计提，保证预览口径与提交一致
   const personals = await db
@@ -135,9 +136,10 @@ export async function previewRepayment(input: RepaymentInput): Promise<Allocatio
   return allocateRepayment(targets, parsed.amountCents);
 }
 
-/** 记一笔还款（服务端权威重算 + 单事务落库，超还自动溢出） */
-export async function createRepayment(input: RepaymentInput) {
+/** 记一笔还款（服务端权威重算 + 单事务落库，超还自动溢出）。先校验 person 归属。 */
+export async function createRepayment(input: RepaymentInput, ownerId: number | null) {
   const parsed = repaymentInputSchema.parse(input);
+  await assertPersonAccess(parsed.personId, ownerId);
   const repaidAt = parsed.repaidAt ?? today();
   const db = getDb();
 

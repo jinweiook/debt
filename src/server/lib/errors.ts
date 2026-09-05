@@ -1,5 +1,21 @@
 /** 统一错误类型：actions 层 catch 后转为结构化错误返回前端 */
 
+export class UnauthorizedError extends Error {
+  readonly code = "UNAUTHORIZED";
+  constructor(message = "未登录或登录已过期，请重新登录") {
+    super(message);
+    this.name = "UnauthorizedError";
+  }
+}
+
+export class ForbiddenError extends Error {
+  readonly code = "FORBIDDEN";
+  constructor(message = "没有权限执行该操作") {
+    super(message);
+    this.name = "ForbiddenError";
+  }
+}
+
 export class DbUnavailableError extends Error {
   readonly code = "DB_UNAVAILABLE";
   constructor(message = "数据库连接失败，请稍后重试") {

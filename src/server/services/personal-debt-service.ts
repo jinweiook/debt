@@ -4,6 +4,7 @@ import { getDb } from "@/server/db/client";
 import { debtAccounts } from "@/server/db/schema";
 import { BusinessRuleError, NotFoundError, ValidationError } from "@/server/lib/errors";
 import { monthOf } from "@/server/lib/dates";
+import { assertPersonAccess } from "./installment-service";
 
 export const personalDebtInputSchema = z
   .object({
@@ -26,8 +27,9 @@ export const personalDebtInputSchema = z
   });
 export type PersonalDebtInput = z.infer<typeof personalDebtInputSchema>;
 
-export async function createPersonalDebt(input: PersonalDebtInput) {
+export async function createPersonalDebt(input: PersonalDebtInput, ownerId: number | null) {
   const parsed = personalDebtInputSchema.parse(input);
+  await assertPersonAccess(parsed.personId, ownerId);
   const db = getDb();
   const [r] = await db.insert(debtAccounts).values({
     personId: parsed.personId,
@@ -67,10 +69,11 @@ export async function listOpenPersonalDebts(personId: number) {
   });
 }
 
-/** 结清/关闭一笔个人欠款（仅允许无剩余时手动关闭） */
-export async function closePersonalDebt(id: number) {
+/** 结清/关闭一笔个人欠款（仅允许无剩余时手动关闭）。校验归属链。 */
+export async function closePersonalDebt(id: number, ownerId: number | null) {
   const db = getDb();
   const row = await getPersonalDebt(id);
+  await assertPersonAccess(row.personId, ownerId);
   if (row.status !== "open") return;
   if (row.remainingPrincipalCents > 0 || row.accruedInterestCents > 0) {
     throw new BusinessRuleError("仍有剩余金额，不能关闭");

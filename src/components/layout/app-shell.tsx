@@ -3,12 +3,26 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { useSession } from "@/components/layout/session";
 
 const navItems = [
   { href: "/", label: "总览", icon: IconHome },
+  { href: "/loans", label: "借贷款", icon: IconLoan },
   { href: "/repayments/new", label: "记还款", icon: IconPlus },
   { href: "/settings/backup", label: "备份", icon: IconDatabase },
 ];
+
+const adminNavItems = [{ href: "/admin/customers", label: "客户管理", icon: IconUsers }];
+
+function IconLoan({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
+      <rect x="3" y="5" width="18" height="14" rx="2.5" />
+      <path d="M3 10h18" />
+      <path d="M7 14.5h4" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 function IconHome({ className }: { className?: string }) {
   return (
@@ -34,10 +48,21 @@ function IconDatabase({ className }: { className?: string }) {
     </svg>
   );
 }
+function IconUsers({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
+      <circle cx="9" cy="8" r="3.5" />
+      <path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6" strokeLinecap="round" />
+      <path d="M16 5a3.5 3.5 0 0 1 0 7M17.5 14.5c2.4.7 4 2.8 4 5.5" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const session = useSession();
+  const nav = session?.isAdmin ? [...navItems, ...adminNavItems] : navItems;
 
   const isActive = (href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href));
 
@@ -52,7 +77,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </span>
         </Link>
         <nav className="mt-8 flex flex-col gap-1.5">
-          {navItems.map((item) => (
+          {nav.map((item) => (
             <Link
               key={item.href}
               href={item.href}
@@ -68,7 +93,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </Link>
           ))}
         </nav>
-        <div className="mt-auto">
+        <div className="mt-auto space-y-3">
+          {session && (
+            <div className="flex items-center gap-2 px-3.5 py-2 rounded-[var(--radius-md)] bg-surface-2/60 border border-border">
+              <span className="h-7 w-7 shrink-0 rounded-full gradient-card border border-accent-2/30 flex items-center justify-center text-xs font-bold text-accent-2">
+                {session.username.slice(0, 1).toUpperCase()}
+              </span>
+              <div className="min-w-0">
+                <p className="text-sm font-medium truncate">{session.username}</p>
+                <p className="text-[11px] text-text-dim">{session.isAdmin ? "管理员 · 可见全部" : "客户"}</p>
+              </div>
+            </div>
+          )}
           <button
             onClick={async () => {
               try {
@@ -92,7 +128,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       {/* 移动端底部 Tab */}
       <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 glass !rounded-none border-x-0 border-b-0 px-6 py-2 flex justify-around">
-        {navItems.map((item) => (
+        {nav.map((item) => (
           <Link
             key={item.href}
             href={item.href}
