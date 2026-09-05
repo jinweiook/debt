@@ -27,7 +27,7 @@ export default async function HomePage() {
   const statsList = await Promise.all(persons.map((p) => personStats(p.id)));
 
   // 管理员视图：补充每个欠款人的归属客户名
-  const ownerNames = new Map<number, string>();
+  const ownerNames = new Map<string, string>();
   if (isAdmin) {
     const db = getDb();
     const userRows = await db.select({ id: users.id, username: users.username }).from(users);

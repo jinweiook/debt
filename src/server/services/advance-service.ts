@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { getDb, type Db } from "@/server/db/client";
-import { advances, debtAccounts, installmentBills } from "@/server/db/schema";
+import { advances, debtAccounts, installmentBills, type OwnerId } from "@/server/db/schema";
 import { BusinessRuleError, NotFoundError } from "@/server/lib/errors";
 import { today } from "@/server/lib/dates";
 import { assertPersonAccess } from "./installment-service";
@@ -10,7 +10,7 @@ import { assertPersonAccess } from "./installment-service";
  * 自动生成一笔 personal 类型（origin=advance，无息）欠款，该期标记为已垫付。
  * bill_id UNIQUE 约束保证一期只能垫付一次（幂等）。先校验归属链。
  */
-export async function markBillAdvanced(billId: number, ownerId: number | null, advanceDate?: string) {
+export async function markBillAdvanced(billId: number, ownerId: OwnerId, advanceDate?: string) {
   const db = getDb();
   return db.transaction(async (tx) => {
     const [bill] = await tx.select().from(installmentBills).where(eq(installmentBills.id, billId)).limit(1);
@@ -29,28 +29,34 @@ export async function markBillAdvanced(billId: number, ownerId: number | null, a
     if (amount <= 0) throw new BusinessRuleError("该期无剩余应还，无需垫付");
 
     // 1. 生成垫付款个人欠款
-    const [accIns] = await tx.insert(debtAccounts).values({
-      personId: account.personId,
-      type: "personal",
-      title: `垫付款 · ${account.title} 第${bill.periodNo}期`,
-      principalCents: amount,
-      remainingPrincipalCents: amount,
-      interestType: "none",
-      startDate: advanceDate ?? today(),
-      origin: "advance",
-      note: `由「${account.title}」第 ${bill.periodNo} 期垫付生成`,
-    });
-    const generatedAccountId = Number(accIns.insertId);
+    const [accIns] = await tx
+      .insert(debtAccounts)
+      .values({
+        personId: account.personId,
+        type: "personal",
+        title: `垫付款 · ${account.title} 第${bill.periodNo}期`,
+        principalCents: amount,
+        remainingPrincipalCents: amount,
+        interestType: "none",
+        startDate: advanceDate ?? today(),
+        origin: "advance",
+        note: `由「${account.title}」第 ${bill.periodNo} 期垫付生成`,
+      })
+      .returning({ id: debtAccounts.id });
+    const generatedAccountId = accIns.id;
 
     // 2. 垫付流水（bill_id UNIQUE 幂等）
-    const [advIns] = await tx.insert(advances).values({
-      personId: account.personId,
-      billId,
-      amountCents: amount,
-      advanceDate: advanceDate ?? today(),
-      generatedAccountId,
-    });
-    const advanceId = Number(advIns.insertId);
+    const [advIns] = await tx
+      .insert(advances)
+      .values({
+        personId: account.personId,
+        billId,
+        amountCents: amount,
+        advanceDate: advanceDate ?? today(),
+        generatedAccountId,
+      })
+      .returning({ id: advances.id });
+    const advanceId = advIns.id;
 
     // 3. 账单标记已垫付
     await tx

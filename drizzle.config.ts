@@ -1,17 +1,15 @@
 import { defineConfig } from "drizzle-kit";
 
-const useSsl = process.env.DB_SSL === "true";
+const url = process.env.DIRECT_URL ?? process.env.DATABASE_URL;
 
 export default defineConfig({
-  dialect: "mysql",
+  dialect: "postgresql",
   schema: "./src/server/db/schema.ts",
   out: "./drizzle",
   dbCredentials: {
-    host: process.env.DB_HOST ?? "127.0.0.1",
-    port: Number(process.env.DB_PORT ?? 3306),
-    user: process.env.DB_USER ?? "root",
-    password: process.env.DB_PASSWORD ?? "dev123",
-    database: process.env.DB_NAME ?? "debt",
-    ...(useSsl ? { ssl: { minVersion: "TLSv1.2", rejectUnauthorized: true } as never } : {}),
+    url: url ?? "",
   },
+  // 迁移用直连（端口 5432）；事务池上跑 DDL 容易出问题
+  verbose: true,
+  strict: true,
 });

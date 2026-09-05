@@ -25,7 +25,7 @@ export default async function LoansPage({
   const rows = await listLoanAccounts(q, ownerId);
 
   // 管理员视图补充归属客户名
-  const ownerNames = new Map<number, string>();
+  const ownerNames = new Map<string, string>();
   if (isAdmin) {
     const db = getDb();
     const userRows = await db.select({ id: users.id, username: users.username }).from(users);

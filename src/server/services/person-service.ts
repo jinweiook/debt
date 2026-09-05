@@ -1,7 +1,7 @@
 import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "@/server/db/client";
-import { persons } from "@/server/db/schema";
+import { persons, type OwnerId } from "@/server/db/schema";
 import { NotFoundError } from "@/server/lib/errors";
 import { getOrSet, invalidateCache, invalidateNamespace } from "@/server/redis/cache";
 
@@ -16,15 +16,15 @@ export type PersonInput = z.infer<typeof personInputSchema>;
 const CACHE_TTL = 60; // 秒
 
 /** 缓存作用域：admin 为 null → "admin"；普通客户 → "u{userId}" */
-export function ownerScope(ownerId: number | null): string {
+export function ownerScope(ownerId: OwnerId): string {
   return ownerId == null ? "admin" : `u${ownerId}`;
 }
 
 /**
  * 按归属列出欠款人。
- * @param ownerId 客户 id；null = 管理员，列出全部
+ * @param ownerId 客户 id（UUID）；null = 管理员，列出全部
  */
-export async function listPersons(ownerId: number | null, includeArchived = false) {
+export async function listPersons(ownerId: OwnerId, includeArchived = false) {
   const cacheKey = `${ownerScope(ownerId)}:${includeArchived ? "all" : "active"}`;
   return getOrSet(
     "persons:list",
@@ -48,7 +48,7 @@ export async function listPersons(ownerId: number | null, includeArchived = fals
  * - 普通客户只能访问自己名下的欠款人，否则视为不存在（避免枚举探测）
  * - 管理员（ownerId=null）可访问任意欠款人
  */
-export async function getPerson(id: number, ownerId: number | null) {
+export async function getPerson(id: number, ownerId: OwnerId) {
   const db = getDb();
   const [row] = await db.select().from(persons).where(eq(persons.id, id)).limit(1);
   if (!row) throw new NotFoundError("欠款人不存在");
@@ -56,20 +56,23 @@ export async function getPerson(id: number, ownerId: number | null) {
   return row;
 }
 
-export async function createPerson(input: PersonInput, ownerId: number) {
+export async function createPerson(input: PersonInput, ownerId: string) {
   const db = getDb();
-  const [r] = await db.insert(persons).values({
-    ownerUserId: ownerId,
-    name: input.name,
-    note: input.note || null,
-    contact: input.contact || null,
-    defaultRepayDay: input.defaultRepayDay ?? null,
-  });
+  const [row] = await db
+    .insert(persons)
+    .values({
+      ownerUserId: ownerId,
+      name: input.name,
+      note: input.note || null,
+      contact: input.contact || null,
+      defaultRepayDay: input.defaultRepayDay ?? null,
+    })
+    .returning({ id: persons.id });
   await invalidatePersonsCache();
-  return getPerson(Number(r.insertId), null);
+  return getPerson(row.id, null);
 }
 
-export async function updatePerson(id: number, input: PersonInput, ownerId: number | null) {
+export async function updatePerson(id: number, input: PersonInput, ownerId: OwnerId) {
   const db = getDb();
   await getPerson(id, ownerId);
   await db
@@ -86,7 +89,7 @@ export async function updatePerson(id: number, input: PersonInput, ownerId: numb
   return getPerson(id, ownerId);
 }
 
-export async function archivePerson(id: number, ownerId: number | null) {
+export async function archivePerson(id: number, ownerId: OwnerId) {
   const db = getDb();
   await getPerson(id, ownerId);
   await db.update(persons).set({ status: "archived", updatedAt: new Date() }).where(eq(persons.id, id));

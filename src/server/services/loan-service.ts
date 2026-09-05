@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, like, or } from "drizzle-orm";
 import { getDb } from "@/server/db/client";
-import { debtAccounts, installmentBills, persons, repayments } from "@/server/db/schema";
+import { debtAccounts, installmentBills, persons, repayments, type OwnerId } from "@/server/db/schema";
 import { NotFoundError } from "@/server/lib/errors";
 import { assertPersonAccess } from "./installment-service";
 import { virtualAccruedInterest } from "./interest-service";
@@ -9,8 +9,8 @@ export interface LoanRow {
   account: typeof debtAccounts.$inferSelect;
   personName: string;
   personId: number;
-  /** 欠款人归属客户 id（管理员视图展示用） */
-  ownerUserId: number;
+  /** 欠款人归属客户 id（UUID 字符串，管理员视图展示用） */
+  ownerUserId: string;
   /** 剩余应还（分）：分期 = 未还账单合计 - 已还；个人欠款 = 剩余本金 + 应付利息 */
   remainingCents: number;
 }
@@ -20,7 +20,7 @@ export interface LoanRow {
  * - ownerId=null（管理员）列出全部，否则只列自己名下
  * - q 同时匹配欠款人姓名与账户标题
  */
-export async function listLoanAccounts(q?: string, ownerId: number | null = null): Promise<LoanRow[]> {
+export async function listLoanAccounts(q?: string, ownerId: OwnerId = null): Promise<LoanRow[]> {
   const db = getDb();
   const conditions = [];
   if (ownerId != null) conditions.push(eq(persons.ownerUserId, ownerId));
@@ -76,7 +76,7 @@ export interface LoanDetail {
 }
 
 /** 单笔借贷款详情（校验归属链：账户 → 欠款人） */
-export async function getLoanAccountDetail(accountId: number, ownerId: number | null): Promise<LoanDetail> {
+export async function getLoanAccountDetail(accountId: number, ownerId: OwnerId): Promise<LoanDetail> {
   const db = getDb();
   const [account] = await db.select().from(debtAccounts).where(eq(debtAccounts.id, accountId)).limit(1);
   if (!account) throw new NotFoundError("借贷款不存在");

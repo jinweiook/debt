@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/server/db/client";
-import { advances, debtAccounts, installmentBills, persons, repayments } from "@/server/db/schema";
+import { advances, debtAccounts, installmentBills, persons, repayments, type OwnerId } from "@/server/db/schema";
 import { currentMonth, addMonths, monthOf } from "@/server/lib/dates";
 import { getOrSet, invalidateNamespace } from "@/server/redis/cache";
 import { virtualAccruedInterest } from "./interest-service";
@@ -64,7 +64,7 @@ export async function personStats(personId: number): Promise<PersonStats> {
 }
 
 /** 全站总览（带 Redis 缓存，按客户隔离：ownerId=null 表示管理员汇总全部） */
-export async function overviewStats(ownerId: number | null): Promise<PersonStats & { activePersons: number }> {
+export async function overviewStats(ownerId: OwnerId): Promise<PersonStats & { activePersons: number }> {
   return getOrSet(
     "stats",
     `overview:${ownerId == null ? "admin" : `u${ownerId}`}`,
@@ -89,7 +89,7 @@ export async function overviewStats(ownerId: number | null): Promise<PersonStats
 }
 
 /** 未来每月预计应收（暂不做缓存，因数据量不大且实时性要求较高）。personId=null 时按客户维度过滤 */
-export async function monthlyForecast(personId: number | null, months = 12, ownerId: number | null = null): Promise<MonthlyForecast[]> {
+export async function monthlyForecast(personId: number | null, months = 12, ownerId: OwnerId = null): Promise<MonthlyForecast[]> {
   const db = getDb();
   let accountIds: number[] = [];
   if (personId != null) {

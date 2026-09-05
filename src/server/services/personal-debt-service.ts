@@ -1,7 +1,7 @@
 import { and, asc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "@/server/db/client";
-import { debtAccounts } from "@/server/db/schema";
+import { debtAccounts, type OwnerId } from "@/server/db/schema";
 import { BusinessRuleError, NotFoundError, ValidationError } from "@/server/lib/errors";
 import { monthOf } from "@/server/lib/dates";
 import { assertPersonAccess } from "./installment-service";
@@ -27,11 +27,13 @@ export const personalDebtInputSchema = z
   });
 export type PersonalDebtInput = z.infer<typeof personalDebtInputSchema>;
 
-export async function createPersonalDebt(input: PersonalDebtInput, ownerId: number | null) {
+export async function createPersonalDebt(input: PersonalDebtInput, ownerId: OwnerId) {
   const parsed = personalDebtInputSchema.parse(input);
   await assertPersonAccess(parsed.personId, ownerId);
   const db = getDb();
-  const [r] = await db.insert(debtAccounts).values({
+  const [r] = await db
+    .insert(debtAccounts)
+    .values({
     personId: parsed.personId,
     type: "personal",
     title: parsed.title,
@@ -44,8 +46,9 @@ export async function createPersonalDebt(input: PersonalDebtInput, ownerId: numb
     startDate: parsed.startDate,
     origin: "manual",
     note: parsed.note || null,
-  });
-  return Number(r.insertId);
+  })
+    .returning({ id: debtAccounts.id });
+  return r.id;
 }
 
 export async function getPersonalDebt(id: number) {
@@ -70,7 +73,7 @@ export async function listOpenPersonalDebts(personId: number) {
 }
 
 /** 结清/关闭一笔个人欠款（仅允许无剩余时手动关闭）。校验归属链。 */
-export async function closePersonalDebt(id: number, ownerId: number | null) {
+export async function closePersonalDebt(id: number, ownerId: OwnerId) {
   const db = getDb();
   const row = await getPersonalDebt(id);
   await assertPersonAccess(row.personId, ownerId);

@@ -2,7 +2,7 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { z } from "zod";
 import { getDb, type Db } from "@/server/db/client";
-import { debtAccounts, installmentBills, repayments } from "@/server/db/schema";
+import { debtAccounts, installmentBills, repayments, type OwnerId } from "@/server/db/schema";
 import { BusinessRuleError, NotFoundError, ValidationError } from "@/server/lib/errors";
 import { today } from "@/server/lib/dates";
 import { allocateRepayment, type Allocation, type SplitTarget } from "@/lib/repayment-split";
@@ -117,7 +117,7 @@ export async function buildOrderedTargets(
 }
 
 /** 预览分配（不写库）。先校验 person 归属。 */
-export async function previewRepayment(input: RepaymentInput, ownerId: number | null): Promise<Allocation> {
+export async function previewRepayment(input: RepaymentInput, ownerId: OwnerId): Promise<Allocation> {
   const parsed = repaymentInputSchema.parse(input);
   await assertPersonAccess(parsed.personId, ownerId);
   const db = getDb();
@@ -137,7 +137,7 @@ export async function previewRepayment(input: RepaymentInput, ownerId: number | 
 }
 
 /** 记一笔还款（服务端权威重算 + 单事务落库，超还自动溢出）。先校验 person 归属。 */
-export async function createRepayment(input: RepaymentInput, ownerId: number | null) {
+export async function createRepayment(input: RepaymentInput, ownerId: OwnerId) {
   const parsed = repaymentInputSchema.parse(input);
   await assertPersonAccess(parsed.personId, ownerId);
   const repaidAt = parsed.repaidAt ?? today();
@@ -185,19 +185,22 @@ export async function createRepayment(input: RepaymentInput, ownerId: number | n
     // 记录涉及的分期账户，提交后做后续账单重算
     const touchedInstallmentAccounts = new Set<number>();
     for (const r of allocation.results) {
-      const [ins] = await tx.insert(repayments).values({
-        personId: parsed.personId,
-        targetType: r.kind,
-        billId: r.kind === "bill" ? r.id : null,
-        accountId: r.kind === "personal" ? r.id : null,
-        amountCents: r.applied,
-        interestPartCents: r.interestPart,
-        principalPartCents: r.principalPart,
-        batchId,
-        repaidAt,
-        note: parsed.note || null,
-      });
-      insertedIds.push(Number(ins.insertId));
+      const [ins] = await tx
+        .insert(repayments)
+        .values({
+          personId: parsed.personId,
+          targetType: r.kind,
+          billId: r.kind === "bill" ? r.id : null,
+          accountId: r.kind === "personal" ? r.id : null,
+          amountCents: r.applied,
+          interestPartCents: r.interestPart,
+          principalPartCents: r.principalPart,
+          batchId,
+          repaidAt,
+          note: parsed.note || null,
+        })
+        .returning({ id: repayments.id });
+      insertedIds.push(ins.id);
 
       if (r.kind === "bill") {
         const [bill] = await tx.select().from(installmentBills).where(eq(installmentBills.id, r.id)).limit(1);

@@ -1,38 +1,39 @@
-import { NextRequest, NextResponse } from "next/server";
-import { SESSION_COOKIE } from "@/lib/auth-cookie";
+import { NextResponse, type NextRequest } from "next/server";
+import { updateSession } from "@/lib/supabase/middleware";
 
 /**
- * 登录拦截（Edge Runtime 安全）：
- * - 只做「是否携带 session cookie」的粗判断，不触碰 MySQL（Edge 上无 Node 原生模块）
- * - 真正的 session 有效性校验由 (protected)/layout.tsx 在 Node Runtime 完成
- * - /api/health、/api/auth/* 保持公开
+ * 登录拦截 + Supabase 会话刷新（Edge Runtime）。
+ *
+ * - 会话刷新：每次请求都用 getUser() 向 Auth 服务器校验并续期 token，
+ *   过期 token 会在这里被换成新 cookie，避免用户被莫名登出
+ * - 路由保护：这里只做「有没有登录用户」的粗判断；
+ *   角色与状态（admin/user、disabled）由 (protected)/layout.tsx 在 Node Runtime 精校验
+ * - /api/health、/api/auth/* 保持公开，不参与刷新（登录接口自己会写 cookie）
  */
-
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
-  // 公开 API：健康检查、登录认证
+
   if (pathname === "/api/health" || pathname.startsWith("/api/auth/")) {
     return NextResponse.next();
   }
 
-  const hasSessionCookie = !!req.cookies.get(SESSION_COOKIE)?.value;
+  const { user, response, applyCookies } = await updateSession(req);
 
   if (pathname.startsWith("/login") || pathname.startsWith("/register")) {
-    // 携带 cookie 时先放行到登录页，由页面层判断是否有效；无效仍停留在登录页
-    if (hasSessionCookie) {
-      return NextResponse.redirect(new URL("/", req.url));
+    // 已登录用户访问登录/注册页 → 直接回首页
+    if (user) {
+      return applyCookies(NextResponse.redirect(new URL("/", req.url)));
     }
-    return NextResponse.next();
+    return response;
   }
 
-  // 无 cookie 直接重定向；有 cookie 放行，交由 (protected)/layout 做真校验
-  if (!hasSessionCookie) {
+  if (!user) {
     const url = new URL("/login", req.url);
     url.searchParams.set("next", pathname);
-    return NextResponse.redirect(url);
+    return applyCookies(NextResponse.redirect(url));
   }
 
-  return NextResponse.next();
+  return response;
 }
 
 export const config = {

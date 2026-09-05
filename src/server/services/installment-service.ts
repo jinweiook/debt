@@ -1,14 +1,14 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, type Db } from "@/server/db/client";
-import { debtAccounts, installmentBills } from "@/server/db/schema";
+import { debtAccounts, installmentBills, type OwnerId } from "@/server/db/schema";
 import { BusinessRuleError, NotFoundError, ValidationError } from "@/server/lib/errors";
 import { addMonthsToDate } from "@/server/lib/dates";
 import { monthlyInterestCents } from "@/server/lib/money";
 import { getPerson } from "./person-service";
 
 /** 校验 person 归属（ownerId=null 表示管理员不限制） */
-export async function assertPersonAccess(personId: number, ownerId: number | null) {
+export async function assertPersonAccess(personId: number, ownerId: OwnerId) {
   await getPerson(personId, ownerId);
 }
 
@@ -147,7 +147,7 @@ export function generateDynamicBills(params: {
 }
 
 /** 创建分期账户 + 全部账单（单事务）。先校验 person 归属。 */
-export async function createInstallmentDebt(input: InstallmentInput, ownerId: number | null) {
+export async function createInstallmentDebt(input: InstallmentInput, ownerId: OwnerId) {
   const parsed = installmentInputSchema.parse(input);
   await assertPersonAccess(parsed.personId, ownerId);
   const bills = [...parsed.bills].sort((a, b) => a.periodNo - b.periodNo);
@@ -166,22 +166,25 @@ export async function createInstallmentDebt(input: InstallmentInput, ownerId: nu
 
   const db = getDb();
   return db.transaction(async (tx) => {
-    const [acc] = await tx.insert(debtAccounts).values({
-      personId: parsed.personId,
-      type: "installment",
-      title: parsed.title,
-      source: parsed.source || null,
-      principalCents: totalPrincipal,
-      remainingPrincipalCents: totalPrincipal,
-      interestType: isDynamic ? "annual" : "none",
-      annualRateBps: isDynamic ? parsed.annualRateBps : null,
-      interestMode: parsed.interestMode,
-      dynamicPlan: isDynamic ? parsed.dynamicPlan : null,
-      startDate: parsed.startDate,
-      termMonths: bills.length,
-      note: parsed.note || null,
-    });
-    const accountId = Number(acc.insertId);
+    const [acc] = await tx
+      .insert(debtAccounts)
+      .values({
+        personId: parsed.personId,
+        type: "installment",
+        title: parsed.title,
+        source: parsed.source || null,
+        principalCents: totalPrincipal,
+        remainingPrincipalCents: totalPrincipal,
+        interestType: isDynamic ? "annual" : "none",
+        annualRateBps: isDynamic ? parsed.annualRateBps : null,
+        interestMode: parsed.interestMode,
+        dynamicPlan: isDynamic ? parsed.dynamicPlan : null,
+        startDate: parsed.startDate,
+        termMonths: bills.length,
+        note: parsed.note || null,
+      })
+      .returning({ id: debtAccounts.id });
+    const accountId = acc.id;
     await tx.insert(installmentBills).values(
       bills.map((b) => ({
         accountId,
@@ -289,7 +292,7 @@ function computeEqualPrincipal(total: number, periodNo: number, term: number): n
 export async function updateBill(
   billId: number,
   patch: { dueDate?: string; principalCents?: number; interestCents?: number; note?: string },
-  ownerId: number | null,
+  ownerId: OwnerId,
 ) {
   const db = getDb();
   return db.transaction(async (tx) => {

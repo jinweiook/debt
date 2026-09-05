@@ -8,14 +8,16 @@ config({ path: ".env.local" });
 config();
 
 import { eq } from "drizzle-orm";
-import { getDb } from "../src/server/db/client";
-import { debtAccounts, installmentBills, persons as personsTable } from "../src/server/db/schema";
+import postgres from "postgres";
+import { drizzle } from "drizzle-orm/postgres-js";
+import { debtAccounts, installmentBills, persons as personsTable, users as usersTable } from "../src/server/db/schema";
 import { personStats, overviewStats } from "../src/server/services/stats-service";
 import { previewRepayment, createRepayment, listRepaymentsByPerson } from "../src/server/services/repayment-service";
 import { markBillAdvanced } from "../src/server/services/advance-service";
 import { exportSnapshot, validateSnapshot, importSnapshot, clearAllData } from "../src/server/services/backup-service";
 import { virtualAccruedInterest } from "../src/server/services/interest-service";
 import { centsToYuan } from "../src/server/lib/money";
+import { createAdminClient } from "../src/lib/supabase/admin";
 
 let passed = 0;
 let failed = 0;
@@ -30,7 +32,20 @@ function check(name: string, cond: boolean, detail = "") {
 }
 
 async function main() {
-  const db = getDb();
+  const url = process.env.DATABASE_URL;
+  if (!url) {
+    console.error("缺少 DATABASE_URL");
+    process.exit(1);
+  }
+  const useSsl = process.env.DB_SSL !== "false";
+  const sql = postgres(url, { prepare: false, max: 1, ssl: useSsl ? "require" : false });
+
+  // 让服务层共用同一 sql 客户端
+  globalThis.__debtSql = sql as any;
+
+  const db = drizzle(sql);
+  globalThis.__debtDb = db as any;
+
   // 用名字查最新一个欠款人（seed.ts 写的是 "张三"），避免不同 DB 自增 ID 不可控
   const [person] = await db.select().from(personsTable).orderBy(personsTable.id).limit(1);
   if (!person) {
@@ -136,8 +151,11 @@ async function main() {
 
   console.log("\n== 8. 动态年化利息（等额本金：还本金后下期利息自动下降） ==");
   // 用全新欠款人隔离
-  const [dyPersonIns] = await db.insert(personsTable).values({ name: "动态测试人" + Date.now(), ownerUserId: adminId });
-  const dyPersonId = Number(dyPersonIns.insertId);
+  const [dyPersonIns] = await db
+    .insert(personsTable)
+    .values({ name: "动态测试人" + Date.now(), ownerUserId: adminId })
+    .returning({ id: personsTable.id });
+  const dyPersonId = dyPersonIns.id;
   // 70000 / 12 / 2.6% / 等额本金：每月本金 5833.33，利息按剩余本金算
   const dyAcc = await (await import("../src/server/services/installment-service")).createInstallmentDebt({
     personId: dyPersonId,
@@ -181,8 +199,11 @@ async function main() {
   check(`第2期利息已动态重算 = 147.66 元 (实际 ${dyBill2After.interestCents})`, dyBill2After.interestCents === dyExpected2);
 
   console.log("\n== 9. 动态年化利息（先息后本：超额还到末期本金） ==");
-  const [ioPersonIns] = await db.insert(personsTable).values({ name: "先息后本测试人" + Date.now(), ownerUserId: adminId });
-  const ioPersonId = Number(ioPersonIns.insertId);
+  const [ioPersonIns] = await db
+    .insert(personsTable)
+    .values({ name: "先息后本测试人" + Date.now(), ownerUserId: adminId })
+    .returning({ id: personsTable.id });
+  const ioPersonId = ioPersonIns.id;
   // 70000 / 12 / 2.6% / 先息后本：前 11 期本金=0，末期本金=70000
   const ioAcc = await (await import("../src/server/services/installment-service")).createInstallmentDebt({
     personId: ioPersonId,
@@ -221,8 +242,11 @@ async function main() {
   check(`先息后本：末期 planned 本金已重算 (实际 ${ioBill12After.principalCents})`, ioBill12After.principalCents === 6815167);
 
   console.log("\n== 10. 你的例子：先息后本 还 1318 元 = 利息 151.67 + 本金 1166.33 ==");
-  const [exPersonIns] = await db.insert(personsTable).values({ name: "例子测试人" + Date.now(), ownerUserId: adminId });
-  const exPersonId = Number(exPersonIns.insertId);
+  const [exPersonIns] = await db
+    .insert(personsTable)
+    .values({ name: "例子测试人" + Date.now(), ownerUserId: adminId })
+    .returning({ id: personsTable.id });
+  const exPersonId = exPersonIns.id;
   const exAcc = await (await import("../src/server/services/installment-service")).createInstallmentDebt({
     personId: exPersonId,
     title: "例子分期",
@@ -255,15 +279,35 @@ async function main() {
   const { createPerson, listPersons, getPerson } = await import("../src/server/services/person-service");
   const { NotFoundError } = await import("../src/server/lib/errors");
 
-  // 注册（或复用）一个测试客户
-  const regUser = await register("verify_user", "verify123");
-  let customerOwnerId: number;
-  if (regUser.ok) {
-    customerOwnerId = regUser.userId;
+  // 注册（或复用）一个测试客户（用 mock supabase client，因为脚本无浏览器）
+  const adminClient = createAdminClient();
+  const testEmail = "verify_user@debt.local";
+  const testPassword = "verify123";
+  let customerOwnerId: string;
+  const { data: listed } = await adminClient.auth.admin.listUsers({ page: 1, perPage: 1000 });
+  const existed = listed?.users?.find((u) => u.email?.toLowerCase() === testEmail);
+  if (existed) {
+    customerOwnerId = existed.id;
+    await adminClient.auth.admin.updateUserById(existed.id, { password: testPassword });
   } else {
-    const { users } = await import("../src/server/db/schema");
-    const [u] = await db.select().from(users).where(eq(users.username, "verify_user")).limit(1);
-    customerOwnerId = u.id;
+    const { data: created } = await adminClient.auth.admin.createUser({
+      email: testEmail,
+      password: testPassword,
+      email_confirm: true,
+    });
+    if (!created?.user?.id) throw new Error("无法在 Supabase Auth 创建测试用户");
+    customerOwnerId = created.user.id;
+  }
+  // 业务侧 profile 若缺失则补
+  const [profile] = await db.select().from(usersTable).where(eq(usersTable.id, customerOwnerId)).limit(1);
+  if (!profile) {
+    await db.insert(usersTable).values({
+      id: customerOwnerId,
+      username: "verify_user",
+      email: testEmail,
+      role: "user",
+      status: "active",
+    });
   }
 
   // 客户名下新建欠款人，归属正确
@@ -306,10 +350,11 @@ async function main() {
   check("客户对他人账单记还款被拦截", repayDenied);
 
   console.log(`\n========== 结果：${passed} 通过 / ${failed} 失败 ==========\n`);
+  await sql.end();
   process.exit(failed > 0 ? 1 : 0);
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error("验证脚本异常：", err);
   process.exit(1);
 });

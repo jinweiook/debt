@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { eq, inArray } from "drizzle-orm";
 import { getDb } from "@/server/db/client";
-import { advances, debtAccounts, installmentBills, persons, repayments, users } from "@/server/db/schema";
+import { advances, debtAccounts, installmentBills, persons, repayments, users, type OwnerId } from "@/server/db/schema";
 import { ValidationError } from "@/server/lib/errors";
 import { invalidateNamespace } from "@/server/redis/cache";
 
@@ -20,7 +20,7 @@ const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const personRow = z.object({
   id: z.number().int().positive(),
   // 兼容旧版快照：缺省时导入到当前登录客户名下
-  ownerUserId: z.number().int().positive().optional(),
+  ownerUserId: z.string().uuid().optional(),
   name: z.string().max(64),
   note: z.string().max(512).nullable(),
   contact: z.string().max(128).nullable(),
@@ -112,7 +112,7 @@ export type Snapshot = z.infer<typeof snapshotSchema>;
  * - 普通客户：只导出自己名下的全部数据
  * - 管理员（ownerId=null）：导出整库
  */
-export async function exportSnapshot(ownerId: number | null): Promise<Snapshot> {
+export async function exportSnapshot(ownerId: OwnerId): Promise<Snapshot> {
   const db = getDb();
 
   if (ownerId == null) {
@@ -215,7 +215,7 @@ export function validateSnapshot(raw: unknown): Snapshot {
  * - 普通客户：仅替换自己名下数据，快照中所有欠款人强制归属到当前客户；
  *   快照 id 与其他客户的数据冲突时拒绝导入（整体回滚，不会污染他人数据）
  */
-export async function importSnapshot(snapshot: Snapshot, ownerId: number | null): Promise<void> {
+export async function importSnapshot(snapshot: Snapshot, ownerId: OwnerId): Promise<void> {
   const db = getDb();
 
   if (ownerId == null) {
@@ -270,11 +270,12 @@ export async function importSnapshot(snapshot: Snapshot, ownerId: number | null)
   await invalidateAllCache();
 }
 
-/** 插入快照数据；快照未携带归属时回退到 fallbackOwnerId */
-async function insertSnapshotData(tx: Tx, snapshot: Snapshot, fallbackOwnerId: number): Promise<void> {
+/** 插入快照数据；快照未携带归属时回退到 fallbackOwnerId（调用方保证非空） */
+async function insertSnapshotData(tx: Tx, snapshot: Snapshot, fallbackOwnerId: string): Promise<void> {
+  const owner: string = fallbackOwnerId;
   if (snapshot.persons.length > 0) {
     await tx.insert(persons).values(
-      snapshot.persons.map((p) => ({ ...p, ownerUserId: p.ownerUserId ?? fallbackOwnerId })),
+      snapshot.persons.map((p) => ({ ...p, ownerUserId: p.ownerUserId ?? owner })),
     );
   }
   if (snapshot.debtAccounts.length > 0) {
@@ -291,11 +292,12 @@ async function insertSnapshotData(tx: Tx, snapshot: Snapshot, fallbackOwnerId: n
   }
 }
 
-async function firstAdminId(): Promise<number> {
+async function firstAdminId(): Promise<string> {
   const db = getDb();
   const [admin] = await db.select({ id: users.id }).from(users).where(eq(users.role, "admin")).limit(1);
   if (!admin) throw new ValidationError("系统中不存在管理员账号，无法确定数据归属");
-  return admin.id;
+  // admin 一定存在（上面已校验），TS 推断为 OwnerId = string | null 故手动收窄
+  return admin.id as string;
 }
 
 /** 危险操作：清空全部数据（仅管理员调用，调用方负责鉴权） */

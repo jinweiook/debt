@@ -3,7 +3,8 @@
 import { createContext, useContext } from "react";
 
 export interface SessionUser {
-  userId: number;
+  /** users.id（UUID） */
+  userId: string;
   username: string;
   role: string;
   isAdmin: boolean;

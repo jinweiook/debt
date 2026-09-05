@@ -25,7 +25,7 @@ export default async function AdminCustomersPage() {
   ]);
 
   // 每个客户名下的欠款人与总欠款
-  const statsByUser = new Map<number, { personCount: number; totalOutstanding: number }>();
+  const statsByUser = new Map<string, { personCount: number; totalOutstanding: number }>();
   const activePersons = personRows.filter((p) => p.status === "active");
   const statsList = await Promise.all(activePersons.map((p) => personStats(p.id)));
   for (let i = 0; i < activePersons.length; i++) {
