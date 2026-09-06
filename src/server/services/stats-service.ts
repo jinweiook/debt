@@ -29,7 +29,12 @@ const STATS_TTL = 60; // 秒
 /** 计算单个欠款人统计（annual 利息用虚拟计提，不写库） */
 export async function personStats(personId: number): Promise<PersonStats> {
   const db = getDb();
-  const accounts = await db.select().from(debtAccounts).where(eq(debtAccounts.personId, personId));
+  // 并行查询，减少往返时间（在单连接下利用 postgres.js 的管道化）
+  const [accounts, reps, advs] = await Promise.all([
+    db.select().from(debtAccounts).where(eq(debtAccounts.personId, personId)),
+    db.select().from(repayments).where(eq(repayments.personId, personId)),
+    db.select().from(advances).where(eq(advances.personId, personId)),
+  ]);
 
   const installmentIds = accounts.filter((a) => a.type === "installment").map((a) => a.id);
   let installmentRemaining = 0;
@@ -47,10 +52,7 @@ export async function personStats(personId: number): Promise<PersonStats> {
     .filter((a) => a.type === "personal" && a.status === "open")
     .reduce((s, a) => s + a.remainingPrincipalCents + virtualAccruedInterest(a), 0);
 
-  const reps = await db.select().from(repayments).where(eq(repayments.personId, personId));
   const totalReceived = reps.reduce((s, r) => s + r.amountCents, 0);
-
-  const advs = await db.select().from(advances).where(eq(advances.personId, personId));
   const totalAdvanced = advs.reduce((s, a) => s + a.amountCents, 0);
 
   return {
@@ -72,6 +74,20 @@ export async function overviewStats(ownerId: OwnerId): Promise<PersonStats & { a
       const db = getDb();
       const where = ownerId == null ? eq(persons.status, "active") : and(eq(persons.status, "active"), eq(persons.ownerUserId, ownerId));
       const allPersons = await db.select().from(persons).where(where);
+
+      if (allPersons.length === 0) {
+        return {
+          personId: 0,
+          totalOutstanding: 0,
+          installmentRemaining: 0,
+          personalRemaining: 0,
+          totalReceived: 0,
+          totalAdvanced: 0,
+          activePersons: 0,
+        };
+      }
+
+      // 优化：一次性查出所有人的统计数据，减少数据库往返
       const stats = await Promise.all(allPersons.map((p) => personStats(p.id)));
       const sum = (k: keyof PersonStats) => stats.reduce((s, x) => s + (x[k] as number), 0);
       return {

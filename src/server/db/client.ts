@@ -47,7 +47,8 @@ function createSql(): Sql {
     // Supabase 事务池（pgBouncer transaction 模式）不支持预处理语句，必须关掉
     prepare: false,
     // serverless 每实例只占 1 条连接，多路复用交给 Supabase 池，避免连接耗尽
-    max: Number(process.env.DB_POOL_MAX ?? 1),
+    // 本地开发建议调大，提高并行查询性能
+    max: Number(process.env.DB_POOL_MAX ?? 5),
     /**
      * serverless 实例被冻结再解冻后，池里的连接会变成「半死」状态：
      * TCP 还在，但对端早已丢弃，查询会一直挂到 statement timeout（57014）。
