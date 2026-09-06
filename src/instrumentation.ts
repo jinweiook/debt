@@ -1,28 +1,37 @@
+/**
+ * 启动钩子。
+ *
+ * 注意：instrumentation.ts 会被 Next.js 同时编译进 Node 与 Edge bundle，
+ * 所以这里**不能 import 任何 Node-only 模块**（postgres / node:net / node:tls 等），
+ * 否则 Edge 打包阶段直接报 Module not found。
+ * 需要用到数据库能力时，一律通过全局标记让 db client 自己去处理。
+ */
 export async function register() {
-  // 仅在 Node.js runtime（服务端）启动时执行
   if (process.env.NEXT_RUNTIME === "nodejs") {
-    try {
-      const { pingDb } = await import("@/server/db/client");
-      const latency = await pingDb();
-      console.log(`[db] 启动健康检查通过，延迟 ${latency}ms`);
-    } catch (err) {
-      // 不阻断进程：让页面层给出友好错误提示而非白屏
-      console.error("[db] 启动健康检查失败：", err);
-      if (isIpv6Unreachable(err)) {
-        console.error(
-          "[db] 这是 IPv6 不可达导致的连接失败。请检查：\n" +
-            "  1. DATABASE_URL 必须用 Supabase 的 Transaction pooler（端口 6543），不要用 Direct connection（端口 5432）\n" +
-            "  2. Supabase Dashboard → Connect → Transaction pooler 复制连接串，把 [YOUR-PASSWORD] 换成数据库密码\n" +
-            "  3. 改完环境变量后必须重新部署才会生效",
-        );
-      }
-    }
+    installGlobalGuards();
   }
 }
 
-/** 识别 serverless 环境下典型的 IPv6 出站失败 */
-function isIpv6Unreachable(err: unknown): boolean {
-  const code = (err as { code?: string })?.code;
-  const cause = (err as { cause?: { code?: string } })?.cause?.code;
-  return code === "ENETUNREACH" || cause === "ENETUNREACH";
+declare global {
+  // eslint-disable-next-line no-var
+  var __debtNeedsDbReset: boolean | undefined;
+}
+
+/**
+ * serverless 兜底：postgres-js 在僵死连接上产生的 rejection 可能逃逸出业务 try/catch。
+ * Node 15+ 默认遇到 unhandledRejection 会终止进程，在 EdgeOne Pages / Vercel 上
+ * 表现为实例被反复回收、页面随机 500。这里统一接住，
+ * 并打一个标记让 db client 下次取连接时重建（避免在这里 import 数据库模块）。
+ */
+function installGlobalGuards(): void {
+  if ((globalThis as { __debtGuardsInstalled?: boolean }).__debtGuardsInstalled) return;
+  (globalThis as { __debtGuardsInstalled?: boolean }).__debtGuardsInstalled = true;
+
+  process.on("unhandledRejection", (reason) => {
+    console.error("[runtime] unhandledRejection（已捕获，避免进程被回收）：", reason);
+    const code = (reason as { code?: string })?.code;
+    if (code === "57014" || code === "ENETUNREACH") {
+      globalThis.__debtNeedsDbReset = true;
+    }
+  });
 }

@@ -31,6 +31,9 @@ declare global {
   var __debtSql: Sql | undefined;
   // eslint-disable-next-line no-var
   var __debtDb: Db | undefined;
+  // 由 src/instrumentation.ts 写入，标记连接池需要重建
+  // eslint-disable-next-line no-var
+  var __debtNeedsDbReset: boolean | undefined;
 }
 
 function createSql(): Sql {
@@ -45,9 +48,21 @@ function createSql(): Sql {
     prepare: false,
     // serverless 每实例只占 1 条连接，多路复用交给 Supabase 池，避免连接耗尽
     max: Number(process.env.DB_POOL_MAX ?? 1),
-    idle_timeout: 20,
+    /**
+     * serverless 实例被冻结再解冻后，池里的连接会变成「半死」状态：
+     * TCP 还在，但对端早已丢弃，查询会一直挂到 statement timeout（57014）。
+     * 用 idle_timeout + max_lifetime 双保险强制轮换连接，避免复用僵死连接。
+     */
+    idle_timeout: Number(process.env.DB_IDLE_TIMEOUT ?? 10),
+    // 单条连接最长存活 5 分钟，超时后下次请求自动新建
+    max_lifetime: Number(process.env.DB_MAX_LIFETIME ?? 300),
     connect_timeout: 10,
     ssl: useSsl ? "require" : false,
+    connection: {
+      // 会话级语句超时：宁可快速失败并重建连接，也不要让请求挂死到网关超时
+      statement_timeout: Number(process.env.DB_STATEMENT_TIMEOUT ?? 15_000),
+      application_name: "debt-planner",
+    },
   }) as Sql;
 }
 
@@ -72,6 +87,12 @@ function warnIfDirectConnection(url: string): void {
 
 /** 原始 SQL 客户端（脚本 / 健康检查用） */
 export function getSql(): Sql {
+  // instrumentation 捕获到僵死连接相关的 rejection 后会打这个标记，
+  // 这里同步丢弃旧池重建，实现自愈（那里不能 import 本模块，否则 Edge 打包炸）
+  if (globalThis.__debtNeedsDbReset) {
+    globalThis.__debtNeedsDbReset = false;
+    void resetDb();
+  }
   if (!globalThis.__debtSql) {
     globalThis.__debtSql = createSql();
   }
@@ -92,9 +113,53 @@ export async function closeDb(): Promise<void> {
   globalThis.__debtDb = undefined;
 }
 
-/** 健康检查：返回延迟毫秒数，失败抛错 */
+/**
+ * 强制丢弃当前连接池，下次 getSql() 时重建。
+ * 用于从「僵死连接」中自愈——serverless 实例冻结解冻后旧连接不可用。
+ */
+export async function resetDb(): Promise<void> {
+  const sql = globalThis.__debtSql;
+  globalThis.__debtSql = undefined;
+  globalThis.__debtDb = undefined;
+  if (!sql) return;
+  try {
+    // 僵死连接上 end() 也可能挂住，用 2s 超时兜底，超时就直接放弃
+    await Promise.race([
+      sql.end(),
+      new Promise((resolve) => setTimeout(resolve, 2_000)),
+    ]);
+  } catch {
+    // 关闭失败无所谓，反正这条连接已经不要了
+  }
+}
+
+/**
+ * 健康检查：返回延迟毫秒数，失败抛错。
+ *
+ * 失败时顺手把连接池丢掉，这样下一个请求会拿到全新连接，
+ * 而不是继续复用一条已经僵死的连接反复超时。
+ */
 export async function pingDb(): Promise<number> {
   const start = Date.now();
-  await getSql()`select 1`;
-  return Date.now() - start;
+  try {
+    await getSql()`select 1`;
+    return Date.now() - start;
+  } catch (err) {
+    if (isStatementTimeout(err)) {
+      console.error(
+        "[db] 健康检查触发 statement timeout（57014），已丢弃连接池准备重建。\n" +
+          "  常见原因：1) Supabase 项目处于暂停状态，需到 Dashboard 恢复；\n" +
+          "  2) DATABASE_URL 不是 Transaction pooler（6543）；3) 数据库连接数已打满。",
+      );
+    }
+    void resetDb();
+    throw err;
+  }
+}
+
+/** 57014 = canceling statement due to statement timeout */
+export function isStatementTimeout(err: unknown): boolean {
+  const code = (err as { code?: string })?.code;
+  const cause = (err as { cause?: { code?: string } })?.cause?.code;
+  return code === "57014" || cause === "57014";
 }
