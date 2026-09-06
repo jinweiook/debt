@@ -3,6 +3,7 @@ import { exportSnapshot } from "@/server/services/backup-service";
 import { requireAuth } from "@/server/lib/auth-context";
 import { UnauthorizedError } from "@/server/lib/errors";
 
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {

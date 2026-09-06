@@ -3,6 +3,7 @@ import { importSnapshot, validateSnapshot } from "@/server/services/backup-servi
 import { requireAuth } from "@/server/lib/auth-context";
 import { UnauthorizedError } from "@/server/lib/errors";
 
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
