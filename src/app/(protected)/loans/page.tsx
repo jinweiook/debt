@@ -104,18 +104,18 @@ export default async function LoansPage({
         </form>
 
         {/* 统计小卡片 */}
-        <div className="grid grid-cols-3 gap-3">
-          <Card className="p-4">
+        <div className="grid grid-cols-3 gap-2 md:gap-3">
+          <Card className="p-3.5 md:p-4">
             <p className="text-xs text-text-dim">银行分期</p>
-            <p className="mt-1 text-xl font-bold tnum">{counts.installment}</p>
+            <p className="mt-1 text-lg md:text-xl font-bold tnum">{counts.installment}</p>
           </Card>
-          <Card className="p-4">
+          <Card className="p-3.5 md:p-4">
             <p className="text-xs text-text-dim">个人欠款</p>
-            <p className="mt-1 text-xl font-bold tnum">{counts.personal}</p>
+            <p className="mt-1 text-lg md:text-xl font-bold tnum">{counts.personal}</p>
           </Card>
-          <Card className="p-4">
+          <Card className="p-3.5 md:p-4">
             <p className="text-xs text-text-dim">剩余待收</p>
-            <MoneyText cents={totalRemaining} className="mt-1 text-xl" />
+            <MoneyText cents={totalRemaining} className="mt-1 text-lg md:text-xl" />
           </Card>
         </div>
 

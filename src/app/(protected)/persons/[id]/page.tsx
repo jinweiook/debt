@@ -203,7 +203,7 @@ export default async function PersonDetailPage({ params }: { params: Promise<{ i
                             {statusLabel(acc.status)}
                           </div>
                         </div>
-                        <div className="mt-4 flex items-end justify-between gap-3">
+                        <div className="mt-4 flex flex-wrap items-end justify-between gap-3">
                           <div>
                             <p className="text-xs text-text-dim">剩余应还（本金+利息）</p>
                             <MoneyText cents={acc.status === "open" ? remaining : 0} gradient className="text-2xl" />

@@ -294,7 +294,7 @@ export function InstallmentForm({
         </div>
 
         {bills.length > 0 && (
-          <div className="overflow-x-auto -mx-5 px-5">
+          <div className="overflow-x-auto -mx-4 px-4 sm:-mx-5 sm:px-5">
             {interestMode === "dynamic" && (
               <p className="text-[11px] text-text-dim/80 mb-2">⚙️ 当前为初始计划表。实际每期利息会按当时的剩余本金动态计算；提前还本金会让下期利息降低。</p>
             )}

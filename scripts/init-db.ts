@@ -39,7 +39,7 @@ async function migrateMysql() {
     host: process.env.DB_HOST || "127.0.0.1",
     port: Number(process.env.DB_PORT || 3306),
     user: process.env.DB_USER || "root",
-    password: process.env.DB_PASSWORD || "",
+    password: process.env.DB_PASS || "",
   };
   const database = process.env.DB_NAME || "debt";
   console.log(`[init-db] 连接 MySQL ${connInfo.host}:${connInfo.port}...`);
@@ -109,7 +109,7 @@ main().catch(async (err: any) => {
   if (err?.code === "ECONNREFUSED") {
     console.error("💡 连接被拒绝：确认 MySQL 服务已启动，且 host/port 配置正确");
   } else if (err?.code === "ER_ACCESS_DENIED_ERROR" || err?.code === "28P01") {
-    console.error("💡 账号或密码错误：检查 DB_USER / DB_PASSWORD");
+    console.error("💡 账号或密码错误：检查 DB_USER / DB_PASS");
   }
   process.exit(1);
 });

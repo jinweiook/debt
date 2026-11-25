@@ -20,7 +20,7 @@ export function Checkbox({
       checked={checked}
       onChange={(e) => onChange(e.target.checked)}
       className={cn(
-        "h-4 w-4 shrink-0 cursor-pointer appearance-none rounded border border-border bg-surface-2",
+        "h-5 w-5 shrink-0 cursor-pointer appearance-none rounded border border-border bg-surface-2",
         "checked:bg-accent checked:border-accent transition-fast",
         "checked:bg-[center] checked:bg-no-repeat",
         className,

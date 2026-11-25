@@ -32,14 +32,14 @@ declare global {
 
 function createMysqlPool(): mysql.Pool {
   const database = process.env.DB_NAME || "debt";
-  if (!process.env.DB_PASSWORD && process.env.NODE_ENV === "production") {
-    console.warn("[db] 警告：未配置 DB_PASSWORD");
+  if (!process.env.DB_PASS && process.env.NODE_ENV === "production") {
+    console.warn("[db] 警告：未配置 DB_PASS");
   }
   return mysql.createPool({
     host: process.env.DB_HOST || "127.0.0.1",
     port: Number(process.env.DB_PORT || 3306),
     user: process.env.DB_USER || "root",
-    password: process.env.DB_PASSWORD || "",
+    password: process.env.DB_PASS || "",
     database,
     charset: process.env.DB_CHARSET || "utf8mb4",
     connectionLimit: Number(process.env.DB_POOL_MAX ?? 5),

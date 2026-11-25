@@ -121,8 +121,47 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         ? "管理员 · 全部"
         : "客户";
 
+  const logout = async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } finally {
+      router.push("/login");
+      router.refresh();
+    }
+  };
+
   return (
     <div className="min-h-dvh md:flex">
+      {/* 移动端顶部栏：品牌 + 当前账号 + 退出 */}
+      <header className="md:hidden sticky top-0 z-40 glass !rounded-none border-x-0 border-t-0 px-4 h-14 flex items-center justify-between gap-3">
+        <Link href="/" className="flex items-center gap-2 min-w-0">
+          <span className="h-7 w-7 shrink-0 rounded-[var(--radius-sm)] gradient-brand shadow-[var(--shadow-glow)]" />
+          <span className="text-base font-bold tracking-wide whitespace-nowrap">
+            借还款<span className="gradient-text">规划</span>
+          </span>
+        </Link>
+        {session && (
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="h-6 w-6 shrink-0 rounded-full gradient-card border border-accent-2/30 flex items-center justify-center text-[11px] font-bold text-accent-2">
+                {displayName.slice(0, 1).toUpperCase()}
+              </span>
+              <span className="text-xs text-text-dim truncate max-w-20">{displayName}</span>
+            </div>
+            <button
+              onClick={logout}
+              aria-label="退出登录"
+              className="shrink-0 p-1.5 text-text-dim hover:text-danger transition-fast"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4.5 w-4.5">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" strokeLinecap="round" />
+                <path d="m16 17 5-5-5-5M21 12H9" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          </div>
+        )}
+      </header>
+
       {/* 桌面端左侧栏 */}
       <aside className="hidden md:flex md:w-60 lg:w-64 shrink-0 flex-col border-r border-border bg-surface/40 backdrop-blur-xl sticky top-0 h-dvh p-5">
         <Link href="/" className="flex items-center gap-2.5 px-2 py-1">
@@ -161,14 +200,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
           )}
           <button
-            onClick={async () => {
-              try {
-                await fetch("/api/auth/logout", { method: "POST" });
-              } finally {
-                router.push("/login");
-                router.refresh();
-              }
-            }}
+            onClick={logout}
             className="w-full text-left px-3.5 h-10 rounded-[var(--radius-md)] text-sm text-text-dim hover:text-danger hover:bg-danger/10 transition-fast"
           >
             退出登录
@@ -176,13 +208,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      {/* 主内容 */}
-      <main className="flex-1 min-w-0 px-4 pt-6 pb-24 md:px-8 md:py-8 md:pb-10 max-w-6xl mx-auto w-full">
+      {/* 主内容：移动端底部预留 Tab 栏 + 安全区高度 */}
+      <main className="flex-1 min-w-0 px-4 pt-5 pb-[calc(6rem+env(safe-area-inset-bottom))] md:px-8 md:py-8 md:pb-10 max-w-6xl mx-auto w-full">
         {children}
       </main>
 
-      {/* 移动端底部 Tab */}
-      <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 glass !rounded-none border-x-0 border-b-0 px-3 py-2 flex justify-around overflow-x-auto">
+      {/* 移动端底部 Tab：含 Home 指示条安全区 */}
+      <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 glass !rounded-none border-x-0 border-b-0 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] flex justify-around overflow-x-auto">
         {nav.map((item) => (
           <Link
             key={item.href}

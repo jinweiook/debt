@@ -2,7 +2,7 @@ import { HTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
 
 export function Card({ className, hover, ...props }: HTMLAttributes<HTMLDivElement> & { hover?: boolean }) {
-  return <div className={cn("glass p-5", hover && "card-hover", className)} {...props} />;
+  return <div className={cn("glass p-4 sm:p-5", hover && "card-hover", className)} {...props} />;
 }
 
 export function CardTitle({ className, ...props }: HTMLAttributes<HTMLHeadingElement>) {

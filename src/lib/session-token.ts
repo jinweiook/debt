@@ -32,10 +32,10 @@ function b64urlToBytes(s: string): Uint8Array {
 }
 
 function authSecret(): string {
-  const secret = process.env.AUTH_SECRET;
+  const secret = process.env.AUTH_SIGNING_KEY;
   if (secret) return secret;
   if (process.env.NODE_ENV === "production") {
-    throw new Error("缺少环境变量 AUTH_SECRET（生产环境必须配置随机字符串）");
+    throw new Error("缺少环境变量 AUTH_SIGNING_KEY（生产环境必须配置随机字符串）");
   }
   return "debt-local-dev-secret";
 }

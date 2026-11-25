@@ -14,6 +14,8 @@ export const viewport: Viewport = {
   themeColor: "#070b14",
   width: "device-width",
   initialScale: 1,
+  // 适配刘海屏：让内容延伸到安全区，配合 env(safe-area-inset-*) 使用
+  viewportFit: "cover",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

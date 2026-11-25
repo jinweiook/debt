@@ -41,6 +41,23 @@ body {
   color: var(--color-text);
   font-family: var(--font-sans);
   min-height: 100dvh;
+  /* 防止任何子元素意外撑出横向滚动条 */
+  overflow-x: clip;
+}
+
+body {
+  /* 移动端去掉点按灰色高亮， overscroll 防橡皮筋穿透 */
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+
+/* iOS 输入框聚焦自动缩放：字号 < 16px 会触发，仅移动端兜底，桌面保持紧凑字号 */
+@media (max-width: 767.98px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
 }
 
 /* 背景氛围：双色径向渐变光晕 */

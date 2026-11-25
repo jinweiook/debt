@@ -38,7 +38,7 @@ function LoginForm() {
   };
 
   return (
-    <form onSubmit={submit} className="glass w-full max-w-sm p-8 space-y-5 toast-in">
+    <form onSubmit={submit} className="glass w-full max-w-sm p-6 sm:p-8 space-y-5 toast-in">
       <div className="flex flex-col items-center gap-3 mb-2">
         <span className="h-12 w-12 rounded-[var(--radius-md)] gradient-brand shadow-[var(--shadow-glow)]" />
         <h1 className="text-xl font-bold">

@@ -69,7 +69,7 @@ export function LoansTable({ rows, showOwner }: { rows: LoanRow[]; showOwner: bo
           </div>
         </div>
       )}
-      <div className="overflow-x-auto -mx-5 px-5">
+      <div className="overflow-x-auto -mx-4 px-4 sm:-mx-5 sm:px-5">
         <table className="w-full min-w-[760px] text-sm">
           <thead>
             <tr className="text-left text-xs text-text-dim border-b border-border">

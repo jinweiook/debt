@@ -36,7 +36,8 @@ export function Dialog({
         role="dialog"
         aria-modal="true"
         className={cn(
-          "relative glass w-full sm:max-w-md p-6 toast-in",
+          "relative glass w-full sm:max-w-md p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:pb-6 toast-in",
+          "max-h-[92dvh] overflow-y-auto overscroll-contain",
           "rounded-b-none sm:rounded-b-[var(--radius-lg)]",
           className,
         )}

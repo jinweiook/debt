@@ -14,7 +14,13 @@ export function MonthlyForecastChart({ data }: { data: MonthlyForecast[] }) {
           const heightPct = Math.max((d.amountCents / max) * 100, d.amountCents > 0 ? 6 : 1.5);
           return (
             <div key={d.month} className="flex-1 flex flex-col items-center gap-1.5 min-w-0 group">
-              <span className="text-[10px] tnum text-text-dim opacity-0 group-hover:opacity-100 transition-fast">
+              {/* 移动端无 hover，当前月金额常显 */}
+              <span
+                className={cn(
+                  "text-[10px] tnum text-text-dim opacity-0 group-hover:opacity-100 group-active:opacity-100 transition-fast",
+                  i === 0 && "opacity-100",
+                )}
+              >
                 {d.amountCents > 0 ? formatCents(d.amountCents) : ""}
               </span>
               <div
