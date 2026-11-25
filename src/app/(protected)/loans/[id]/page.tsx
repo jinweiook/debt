@@ -39,6 +39,15 @@ export default async function LoanDetailPage({ params }: { params: Promise<{ id:
 
   const { account, person, bills, repayments, remainingCents } = detail;
   const isInstallment = account.type === "installment";
+
+  // 账单 → 最近一次实际还款日期（多笔部分还款取最新）
+  const repaidDateByBill: Record<number, string> = {};
+  for (const r of repayments) {
+    if (r.billId == null) continue;
+    if (!repaidDateByBill[r.billId] || r.repaidAt > repaidDateByBill[r.billId]) {
+      repaidDateByBill[r.billId] = r.repaidAt;
+    }
+  }
   const ownerUser = auth.dataScope === "all" ? await findUserById(person.ownerUserId) : null;
   const canDeleteDebt = hasPerm(auth, "debt:delete");
   const canCreateRepay = hasPerm(auth, "repayment:create");
@@ -165,7 +174,7 @@ export default async function LoanDetailPage({ params }: { params: Promise<{ id:
             <div className="flex items-center justify-between mb-3">
               <CardTitle>逐期账单</CardTitle>
             </div>
-            <BillTable account={account} bills={bills} personId={person.id} />
+            <BillTable account={account} bills={bills} personId={person.id} repaidDateByBill={repaidDateByBill} />
           </Card>
         )}
 

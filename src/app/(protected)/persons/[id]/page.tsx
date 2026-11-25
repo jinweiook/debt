@@ -89,6 +89,15 @@ export default async function PersonDetailPage({ params }: { params: Promise<{ i
       <Badge tone="dim">已关闭</Badge>
     );
 
+  // 账单 → 最近一次实际还款日期（多笔部分还款取最新）
+  const repaidDateByBill: Record<number, string> = {};
+  for (const r of repayments) {
+    if (r.billId == null) continue;
+    if (!repaidDateByBill[r.billId] || r.repaidAt > repaidDateByBill[r.billId]) {
+      repaidDateByBill[r.billId] = r.repaidAt;
+    }
+  }
+
   return (
     <AppShell>
       <PageHeader
@@ -176,7 +185,7 @@ export default async function PersonDetailPage({ params }: { params: Promise<{ i
                           />
                         </div>
                       </div>
-                      <BillTable account={acc} bills={billsByAccount.get(acc.id) ?? []} personId={personId} />
+                      <BillTable account={acc} bills={billsByAccount.get(acc.id) ?? []} personId={personId} repaidDateByBill={repaidDateByBill} />
                     </Card>
                   ))}
                 </div>

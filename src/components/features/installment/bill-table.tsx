@@ -22,10 +22,13 @@ export function BillTable({
   account,
   bills,
   personId,
+  repaidDateByBill = {},
 }: {
   account: DebtAccount;
   bills: InstallmentBill[];
   personId: number;
+  /** 账单实际还款日期（billId → 最近一次还款日期） */
+  repaidDateByBill?: Record<number, string>;
 }) {
   const [editing, setEditing] = useState<InstallmentBill | null>(null);
   const canRepay = usePermission("repayment:create");
@@ -39,9 +42,9 @@ export function BillTable({
           <tr className="text-left text-xs text-text-dim border-b border-border">
             <th className="py-2.5 pr-3 font-medium">期号</th>
             <th className="py-2.5 pr-3 font-medium">到期日</th>
+            <th className="py-2.5 pr-3 font-medium">还款日期</th>
             <th className="py-2.5 pr-3 font-medium text-right">本金</th>
             <th className="py-2.5 pr-3 font-medium text-right">利息</th>
-            <th className="py-2.5 pr-3 font-medium text-right">合计</th>
             <th className="py-2.5 pr-3 font-medium text-right">已还</th>
             <th className="py-2.5 pr-3 font-medium">状态</th>
             <th className="py-2.5 font-medium text-right">操作</th>
@@ -55,9 +58,10 @@ export function BillTable({
               <tr key={b.id} className={cn("border-b border-border/50 transition-fast hover:bg-white/[0.03]", b.status === "advanced" && "opacity-60")}>
                 <td className="py-3 pr-3 tnum">#{b.periodNo}</td>
                 <td className="py-3 pr-3 tnum text-text-dim">{b.dueDate}</td>
-                <td className="py-3 pr-3 text-right"><MoneyText cents={b.principalCents} prefix="" className="font-normal" /></td>
+                <td className="py-3 pr-3 tnum text-text-dim">{repaidDateByBill[b.id] ?? "—"}</td>
+                {/* 先息后本账单计划本金为 0，超额还的本金落在 paidPrincipalCents，取较大值展示 */}
+                <td className="py-3 pr-3 text-right"><MoneyText cents={Math.max(b.principalCents, b.paidPrincipalCents)} prefix="" className="font-normal" /></td>
                 <td className="py-3 pr-3 text-right"><MoneyText cents={b.interestCents} prefix="" className="font-normal text-text-dim" /></td>
-                <td className="py-3 pr-3 text-right"><MoneyText cents={b.totalCents} prefix="" /></td>
                 <td className="py-3 pr-3 text-right"><MoneyText cents={b.paidCents} prefix="" className="font-normal text-success" /></td>
                 <td className="py-3 pr-3"><Badge tone={st.tone}>{st.label}</Badge></td>
                 <td className="py-3">
