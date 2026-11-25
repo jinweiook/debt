@@ -4,6 +4,7 @@ import { AppShell, PageHeader } from "@/components/layout/app-shell";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { MoneyText } from "@/components/ui/money-text";
+import { ResetPasswordDialog } from "@/components/features/admin/reset-password-dialog";
 import { getAuthContext } from "@/server/lib/auth-context";
 import { getDb } from "@/server/db/client";
 import { persons, users } from "@/server/db/schema";
@@ -53,7 +54,9 @@ export default async function AdminCustomersPage() {
                 <th className="py-2.5 pr-3 font-medium">状态</th>
                 <th className="py-2.5 pr-3 font-medium text-right">欠款人数</th>
                 <th className="py-2.5 pr-3 font-medium text-right">名下总欠款</th>
-                <th className="py-2.5 font-medium">注册时间</th>
+                <th className="py-2.5 pr-3 font-medium">最后登录</th>
+                <th className="py-2.5 pr-3 font-medium">注册时间</th>
+                <th className="py-2.5 font-medium text-right">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -72,7 +75,13 @@ export default async function AdminCustomersPage() {
                     <td className="py-3 pr-3 text-right">
                       <MoneyText cents={s.totalOutstanding} prefix="" />
                     </td>
-                    <td className="py-3 text-text-dim tnum text-xs">{u.createdAt.toISOString().slice(0, 10)}</td>
+                    <td className="py-3 pr-3 text-text-dim tnum text-xs">
+                      {u.lastLoginAt ? u.lastLoginAt.toISOString().slice(0, 16).replace("T", " ") : "从未登录"}
+                    </td>
+                    <td className="py-3 pr-3 text-text-dim tnum text-xs">{u.createdAt.toISOString().slice(0, 10)}</td>
+                    <td className="py-3 text-right">
+                      <ResetPasswordDialog userId={u.id} username={u.username} />
+                    </td>
                   </tr>
                 );
               })}

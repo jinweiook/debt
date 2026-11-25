@@ -1,7 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createInstallmentDebt, updateBill } from "@/server/services/installment-service";
+import { createInstallmentDebt, updateBill, updateInstallmentAccount } from "@/server/services/installment-service";
+import { deleteDebtAccounts } from "@/server/services/deletion-service";
 import { createPersonalDebt, closePersonalDebt } from "@/server/services/personal-debt-service";
 import { invalidateOverviewStats } from "@/server/services/stats-service";
 import { invalidateNamespace } from "@/server/redis/cache";
@@ -37,6 +38,38 @@ export async function updateBillAction(
     await updateBill(billId, patch, auth.ownerId);
     await clearStatsCache();
     revalidatePath(`/persons/${personId}`);
+    revalidatePath("/");
+    return { ok: true, data: null };
+  } catch (err) {
+    return { ok: false, error: toActionError(err) };
+  }
+}
+
+export async function deleteDebtAccountsAction(ids: number[], personId: number): Promise<ActionResult<null>> {
+  try {
+    const auth = await requireAuth();
+    await deleteDebtAccounts(ids, auth.ownerId);
+    await clearStatsCache();
+    revalidatePath(`/persons/${personId}`);
+    revalidatePath("/");
+    revalidatePath("/loans");
+    return { ok: true, data: null };
+  } catch (err) {
+    return { ok: false, error: toActionError(err) };
+  }
+}
+
+export async function updateInstallmentAccountAction(
+  accountId: number,
+  personId: number,
+  patch: { title?: string; source?: string; startDate?: string; note?: string; annualRateBps?: number | null },
+): Promise<ActionResult<null>> {
+  try {
+    const auth = await requireAuth();
+    await updateInstallmentAccount(accountId, patch, auth.ownerId);
+    await clearStatsCache();
+    revalidatePath(`/persons/${personId}`);
+    revalidatePath(`/loans/${accountId}`);
     revalidatePath("/");
     return { ok: true, data: null };
   } catch (err) {

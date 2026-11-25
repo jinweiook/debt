@@ -1,6 +1,7 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, type Db } from "@/server/db/client";
+import { insertAndGetId } from "@/server/db/helpers";
 import { debtAccounts, installmentBills, type OwnerId } from "@/server/db/schema";
 import { BusinessRuleError, NotFoundError, ValidationError } from "@/server/lib/errors";
 import { addMonthsToDate } from "@/server/lib/dates";
@@ -166,25 +167,21 @@ export async function createInstallmentDebt(input: InstallmentInput, ownerId: Ow
 
   const db = getDb();
   return db.transaction(async (tx) => {
-    const [acc] = await tx
-      .insert(debtAccounts)
-      .values({
-        personId: parsed.personId,
-        type: "installment",
-        title: parsed.title,
-        source: parsed.source || null,
-        principalCents: totalPrincipal,
-        remainingPrincipalCents: totalPrincipal,
-        interestType: isDynamic ? "annual" : "none",
-        annualRateBps: isDynamic ? parsed.annualRateBps : null,
-        interestMode: parsed.interestMode,
-        dynamicPlan: isDynamic ? parsed.dynamicPlan : null,
-        startDate: parsed.startDate,
-        termMonths: bills.length,
-        note: parsed.note || null,
-      })
-      .returning({ id: debtAccounts.id });
-    const accountId = acc.id;
+    const accountId = await insertAndGetId(tx, debtAccounts, {
+      personId: parsed.personId,
+      type: "installment",
+      title: parsed.title,
+      source: parsed.source || null,
+      principalCents: totalPrincipal,
+      remainingPrincipalCents: totalPrincipal,
+      interestType: isDynamic ? "annual" : "none",
+      annualRateBps: isDynamic ? parsed.annualRateBps : null,
+      interestMode: parsed.interestMode,
+      dynamicPlan: isDynamic ? parsed.dynamicPlan : null,
+      startDate: parsed.startDate,
+      termMonths: bills.length,
+      note: parsed.note || null,
+    });
     await tx.insert(installmentBills).values(
       bills.map((b) => ({
         accountId,
@@ -332,6 +329,57 @@ export async function updateBill(
         updatedAt: new Date(),
       })
       .where(eq(debtAccounts.id, bill.accountId));
+  });
+}
+
+/** 编辑分期账户级信息。annualRateBps 仅 dynamic 且无任何已还/垫付账单时可改，改后重算全部账单。 */
+export async function updateInstallmentAccount(
+  accountId: number,
+  patch: { title?: string; source?: string; startDate?: string; note?: string; annualRateBps?: number | null },
+  ownerId: OwnerId,
+) {
+  const db = getDb();
+  return db.transaction(async (tx) => {
+    const [account] = await tx.select().from(debtAccounts).where(eq(debtAccounts.id, accountId)).limit(1);
+    if (!account || account.type !== "installment") throw new NotFoundError("分期账户不存在");
+    await assertPersonAccess(account.personId, ownerId);
+
+    const changingRate = patch.annualRateBps !== undefined && patch.annualRateBps !== account.annualRateBps;
+    if (changingRate) {
+      if (account.interestMode !== "dynamic") {
+        throw new BusinessRuleError("仅动态利息模式的分期可以修改年化利率");
+      }
+      if (patch.annualRateBps == null || patch.annualRateBps <= 0 || patch.annualRateBps > 10000) {
+        throw new ValidationError("年化利率不合法");
+      }
+      const [touched] = await tx
+        .select({ id: installmentBills.id })
+        .from(installmentBills)
+        .where(
+          and(
+            eq(installmentBills.accountId, accountId),
+            inArray(installmentBills.status, ["partial", "paid", "advanced"]),
+          ),
+        )
+        .limit(1);
+      if (touched) throw new BusinessRuleError("已有还款或垫付记录，不能再修改年化利率");
+    }
+
+    await tx
+      .update(debtAccounts)
+      .set({
+        title: patch.title?.trim() || account.title,
+        source: patch.source !== undefined ? patch.source || null : account.source,
+        startDate: patch.startDate ?? account.startDate,
+        note: patch.note !== undefined ? patch.note || null : account.note,
+        annualRateBps: changingRate ? patch.annualRateBps : account.annualRateBps,
+        updatedAt: new Date(),
+      })
+      .where(eq(debtAccounts.id, accountId));
+
+    if (changingRate) {
+      await recomputeDynamicBills(tx as unknown as Db, accountId);
+    }
   });
 }
 

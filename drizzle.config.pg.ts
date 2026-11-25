@@ -1,11 +1,16 @@
+import { config } from "dotenv";
+config({ path: ".env.local" });
+config();
+
 import { defineConfig } from "drizzle-kit";
 
 const url = process.env.DIRECT_URL ?? process.env.DATABASE_URL;
 
+/** Postgres 方言（Supabase 部署）：npm run db:generate:pg */
 export default defineConfig({
   dialect: "postgresql",
-  schema: "./src/server/db/schema.ts",
-  out: "./drizzle",
+  schema: "./src/server/db/schema.pg.ts",
+  out: "./drizzle/pg",
   dbCredentials: {
     url: url ?? "",
   },

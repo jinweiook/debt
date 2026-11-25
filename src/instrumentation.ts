@@ -30,7 +30,8 @@ function installGlobalGuards(): void {
   process.on("unhandledRejection", (reason) => {
     console.error("[runtime] unhandledRejection（已捕获，避免进程被回收）：", reason);
     const code = (reason as { code?: string })?.code;
-    if (code === "57014" || code === "ENETUNREACH") {
+    // 57014 = pg statement timeout；PROTOCOL_CONNECTION_LOST/ECONNRESET = mysql 断连
+    if (code === "57014" || code === "ENETUNREACH" || code === "ECONNRESET" || code === "PROTOCOL_CONNECTION_LOST") {
       globalThis.__debtNeedsDbReset = true;
     }
   });

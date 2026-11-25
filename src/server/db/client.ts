@@ -1,30 +1,24 @@
-import dns from "node:dns";
-import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import { drizzle as drizzlePg, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import { drizzle as drizzleMysql } from "drizzle-orm/mysql2";
 import postgres from "postgres";
+import mysql from "mysql2/promise";
 import * as schema from "./schema";
+import { getDialect, isMysql } from "./dialect";
 
 /**
- * postgres.js 连接单例（Supabase Postgres）。
- * 用 globalThis 缓存，防止 Next dev 热更新 / serverless 多实例重复建池导致连接爆炸。
+ * 双方言数据库连接单例。
+ * - DB_DIALECT=mysql（默认）：mysql2 连接池，连本地 MySQL
+ * - DB_DIALECT=postgres：postgres-js，连 Supabase Postgres（部署用）
+ *
+ * 用 globalThis 缓存，防止 Next dev 热更新 / serverless 多实例重复建池。
  * 连接信息全部来自环境变量，禁止硬编码。
- */
-
-/**
- * 强制 IPv4 优先解析。
  *
- * 背景：Supabase 的 Direct connection（端口 5432）在部分网络下会解析到 IPv6 地址，
- * 而 EdgeOne Pages / 多数 serverless 平台不支持 IPv6 出站，会直接抛
- * `connect ENETUNREACH <ipv6>:5432 - Local (:::0)`，页面全部 500。
- * Node 20+ 默认 DNS 解析顺序是 verbatim（DNS 返回什么就用什么），
- * 改成 ipv4first 后只要目标主机有 A 记录就会走 IPv4。
- *
- * 注意：这只是兜底。DATABASE_URL 仍应优先使用 Transaction pooler（端口 6543），
- * 它在 Supabase 侧就是面向 serverless 设计的 IPv4 入口。
+ * 注意：TS 侧 Db 类型以 pg 方言为准（schema.ts 同理），mysql 实例在边界处强转，
+ * 运行时两方方言对 service 层使用的 select/insert/update/delete/transaction 行为一致。
  */
-dns.setDefaultResultOrder("ipv4first");
 
 export type Db = PostgresJsDatabase<typeof schema>;
-export type Sql = postgres.Sql<Record<string, never>>;
+export type Sql = postgres.Sql<Record<string, never>> | mysql.Pool;
 
 declare global {
   // eslint-disable-next-line no-var
@@ -36,75 +30,81 @@ declare global {
   var __debtNeedsDbReset: boolean | undefined;
 }
 
-function createSql(): Sql {
+function createMysqlPool(): mysql.Pool {
+  const database = process.env.DB_NAME || "debt";
+  if (!process.env.DB_PASSWORD && process.env.NODE_ENV === "production") {
+    console.warn("[db] 警告：未配置 DB_PASSWORD");
+  }
+  return mysql.createPool({
+    host: process.env.DB_HOST || "127.0.0.1",
+    port: Number(process.env.DB_PORT || 3306),
+    user: process.env.DB_USER || "root",
+    password: process.env.DB_PASSWORD || "",
+    database,
+    charset: process.env.DB_CHARSET || "utf8mb4",
+    connectionLimit: Number(process.env.DB_POOL_MAX ?? 5),
+    waitForConnections: true,
+    enableKeepAlive: true,
+    // DATE/DATETIME 以字符串返回，交给 drizzle 转换，避免驱动按连接时区转换导致日期漂移
+    dateStrings: true,
+    supportBigNumbers: true,
+    bigNumberStrings: false,
+  });
+}
+
+function createPgSql(): postgres.Sql<Record<string, never>> {
   const url = process.env.DATABASE_URL;
   if (!url) {
     throw new Error("缺少环境变量 DATABASE_URL（Supabase → Connect → Transaction pooler）");
   }
-  warnIfDirectConnection(url);
   const useSsl = process.env.DB_SSL !== "false";
   return postgres(url, {
     // Supabase 事务池（pgBouncer transaction 模式）不支持预处理语句，必须关掉
     prepare: false,
-    // serverless 每实例只占 1 条连接，多路复用交给 Supabase 池，避免连接耗尽
-    // 本地开发建议调大，提高并行查询性能
     max: Number(process.env.DB_POOL_MAX ?? 5),
-    /**
-     * serverless 实例被冻结再解冻后，池里的连接会变成「半死」状态：
-     * TCP 还在，但对端早已丢弃，查询会一直挂到 statement timeout（57014）。
-     * 用 idle_timeout + max_lifetime 双保险强制轮换连接，避免复用僵死连接。
-     */
     idle_timeout: Number(process.env.DB_IDLE_TIMEOUT ?? 10),
-    // 单条连接最长存活 5 分钟，超时后下次请求自动新建
     max_lifetime: Number(process.env.DB_MAX_LIFETIME ?? 300),
     connect_timeout: 10,
     ssl: useSsl ? "require" : false,
     connection: {
-      // 会话级语句超时：宁可快速失败并重建连接，也不要让请求挂死到网关超时
       statement_timeout: Number(process.env.DB_STATEMENT_TIMEOUT ?? 15_000),
       application_name: "debt-planner",
     },
-  }) as Sql;
+  });
 }
 
-/**
- * 端口 5432 是 Supabase Direct connection，不是给 serverless 用的：
- * 它会解析到 IPv6，在 EdgeOne Pages / Vercel 这类环境会 ENETUNREACH。
- * 运行时只给警告不阻断，避免本地用直连跑迁移时被打断。
- */
-function warnIfDirectConnection(url: string): void {
-  try {
-    const { port } = new URL(url);
-    if (port === "5432") {
-      console.warn(
-        "[db] 警告：DATABASE_URL 使用了直连端口 5432。serverless 环境请改用 Transaction pooler（端口 6543），" +
-          "否则很可能出现 connect ENETUNREACH <IPv6>:5432。",
-      );
-    }
-  } catch {
-    // URL 解析失败交给 postgres 自己报错
-  }
-}
-
-/** 原始 SQL 客户端（脚本 / 健康检查用） */
+/** 原始客户端（脚本 / 健康检查用）：pg 为 postgres.Sql，mysql 为 Pool（均有 .end()） */
 export function getSql(): Sql {
   // instrumentation 捕获到僵死连接相关的 rejection 后会打这个标记，
-  // 这里同步丢弃旧池重建，实现自愈（那里不能 import 本模块，否则 Edge 打包炸）
+  // 这里同步丢弃旧池重建，实现自愈
   if (globalThis.__debtNeedsDbReset) {
     globalThis.__debtNeedsDbReset = false;
     void resetDb();
   }
   if (!globalThis.__debtSql) {
-    globalThis.__debtSql = createSql();
+    globalThis.__debtSql = isMysql() ? createMysqlPool() : createPgSql();
   }
   return globalThis.__debtSql;
 }
 
 export function getDb(): Db {
   if (!globalThis.__debtDb) {
-    globalThis.__debtDb = drizzle(getSql(), { schema });
+    const raw = getSql();
+    globalThis.__debtDb = isMysql()
+      ? (drizzleMysql(raw as mysql.Pool, { schema, mode: "default" }) as unknown as Db)
+      : drizzlePg(raw as postgres.Sql<Record<string, never>>, { schema });
   }
   return globalThis.__debtDb;
+}
+
+/** 方言无关的裸 SQL（脚本用）。mysql 返回 rows，pg 返回 RowList。 */
+export async function rawQuery<T = unknown>(text: string, params: unknown[] = []): Promise<T> {
+  const raw = getSql();
+  if (isMysql()) {
+    const [rows] = await (raw as mysql.Pool).query(text, params);
+    return rows as T;
+  }
+  return (await (raw as postgres.Sql).unsafe(text, params as never[])) as unknown as T;
 }
 
 /** 脚本用：主动关闭连接，否则 tsx 进程不会退出 */
@@ -114,53 +114,54 @@ export async function closeDb(): Promise<void> {
   globalThis.__debtDb = undefined;
 }
 
-/**
- * 强制丢弃当前连接池，下次 getSql() 时重建。
- * 用于从「僵死连接」中自愈——serverless 实例冻结解冻后旧连接不可用。
- */
+/** 强制丢弃当前连接池，下次 getSql() 时重建（僵死连接自愈）。 */
 export async function resetDb(): Promise<void> {
   const sql = globalThis.__debtSql;
   globalThis.__debtSql = undefined;
   globalThis.__debtDb = undefined;
   if (!sql) return;
   try {
-    // 僵死连接上 end() 也可能挂住，用 2s 超时兜底，超时就直接放弃
-    await Promise.race([
-      sql.end(),
-      new Promise((resolve) => setTimeout(resolve, 2_000)),
-    ]);
+    await Promise.race([sql.end(), new Promise((resolve) => setTimeout(resolve, 2_000))]);
   } catch {
     // 关闭失败无所谓，反正这条连接已经不要了
   }
 }
 
-/**
- * 健康检查：返回延迟毫秒数，失败抛错。
- *
- * 失败时顺手把连接池丢掉，这样下一个请求会拿到全新连接，
- * 而不是继续复用一条已经僵死的连接反复超时。
- */
+/** 健康检查：返回延迟毫秒数，失败抛错并丢弃连接池。 */
 export async function pingDb(): Promise<number> {
   const start = Date.now();
   try {
-    await getSql()`select 1`;
+    if (isMysql()) {
+      await (getSql() as mysql.Pool).query("SELECT 1");
+    } else {
+      await (getSql() as postgres.Sql)`select 1`;
+    }
     return Date.now() - start;
   } catch (err) {
     if (isStatementTimeout(err)) {
-      console.error(
-        "[db] 健康检查触发 statement timeout（57014），已丢弃连接池准备重建。\n" +
-          "  常见原因：1) Supabase 项目处于暂停状态，需到 Dashboard 恢复；\n" +
-          "  2) DATABASE_URL 不是 Transaction pooler（6543）；3) 数据库连接数已打满。",
-      );
+      console.error("[db] 健康检查触发 statement timeout（57014），已丢弃连接池准备重建。");
     }
     void resetDb();
     throw err;
   }
 }
 
-/** 57014 = canceling statement due to statement timeout */
+/** 57014 = pg canceling statement due to statement timeout */
 export function isStatementTimeout(err: unknown): boolean {
   const code = (err as { code?: string })?.code;
   const cause = (err as { cause?: { code?: string } })?.cause?.code;
   return code === "57014" || cause === "57014";
 }
+
+/** 连接僵死/断开的错误码（instrumentation 自愈判定用，覆盖两种方言） */
+export function isConnectionDropped(err: unknown): boolean {
+  const code = (err as { code?: string })?.code;
+  return (
+    code === "57014" ||
+    code === "ENETUNREACH" ||
+    code === "ECONNRESET" ||
+    code === "PROTOCOL_CONNECTION_LOST"
+  );
+}
+
+export { getDialect };

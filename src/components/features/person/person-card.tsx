@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { MoneyText } from "@/components/ui/money-text";
+import { PersonActions, StopLink } from "./person-actions";
 import type { Person } from "@/server/db/schema";
 import type { PersonStats } from "@/server/services/stats-service";
 
@@ -48,6 +49,9 @@ export function PersonCard({
             <MoneyText cents={stats.personalRemaining} className="text-sm" prefix="" />
           </div>
         </div>
+        <StopLink className="mt-3 flex justify-end gap-2 border-t border-border/50 pt-3">
+          <PersonActions person={person} />
+        </StopLink>
       </Card>
     </Link>
   );

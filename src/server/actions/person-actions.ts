@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { personInputSchema, createPerson, updatePerson, archivePerson } from "@/server/services/person-service";
+import { deletePerson } from "@/server/services/deletion-service";
 import { requireAuth } from "@/server/lib/auth-context";
 import { toActionError, type ActionResult } from "@/server/lib/errors";
 
@@ -36,6 +37,18 @@ export async function archivePersonAction(id: number): Promise<ActionResult<null
     const auth = await requireAuth();
     await archivePerson(id, auth.ownerId);
     revalidatePath("/");
+    return { ok: true, data: null };
+  } catch (err) {
+    return { ok: false, error: toActionError(err) };
+  }
+}
+
+export async function deletePersonAction(id: number): Promise<ActionResult<null>> {
+  try {
+    const auth = await requireAuth();
+    await deletePerson(id, auth.ownerId);
+    revalidatePath("/");
+    revalidatePath("/loans");
     return { ok: true, data: null };
   } catch (err) {
     return { ok: false, error: toActionError(err) };

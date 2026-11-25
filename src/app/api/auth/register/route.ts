@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { register } from "@/server/services/auth-service";
-import { createClient } from "@/lib/supabase/server";
+import { SESSION_COOKIE, sessionCookieOptions } from "@/lib/auth-cookie";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,13 +15,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, message: "账号和密码不能为空" }, { status: 400 });
     }
 
-    const supabase = await createClient();
-    const result = await register(supabase, username, password);
+    const result = await register(username, password);
     if (!result.ok) {
       return NextResponse.json({ ok: false, message: result.message }, { status: 400 });
     }
 
-    return NextResponse.json({ ok: true });
+    const res = NextResponse.json({ ok: true });
+    res.cookies.set(SESSION_COOKIE, result.token, sessionCookieOptions());
+    return res;
   } catch (err) {
     console.error("[api/auth/register]", err);
     return NextResponse.json(

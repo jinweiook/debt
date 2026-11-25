@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { getDb, type Db } from "@/server/db/client";
+import { insertAndGetId } from "@/server/db/helpers";
 import { advances, debtAccounts, installmentBills, type OwnerId } from "@/server/db/schema";
 import { BusinessRuleError, NotFoundError } from "@/server/lib/errors";
 import { today } from "@/server/lib/dates";
@@ -29,34 +30,26 @@ export async function markBillAdvanced(billId: number, ownerId: OwnerId, advance
     if (amount <= 0) throw new BusinessRuleError("该期无剩余应还，无需垫付");
 
     // 1. 生成垫付款个人欠款
-    const [accIns] = await tx
-      .insert(debtAccounts)
-      .values({
-        personId: account.personId,
-        type: "personal",
-        title: `垫付款 · ${account.title} 第${bill.periodNo}期`,
-        principalCents: amount,
-        remainingPrincipalCents: amount,
-        interestType: "none",
-        startDate: advanceDate ?? today(),
-        origin: "advance",
-        note: `由「${account.title}」第 ${bill.periodNo} 期垫付生成`,
-      })
-      .returning({ id: debtAccounts.id });
-    const generatedAccountId = accIns.id;
+    const generatedAccountId = await insertAndGetId(tx, debtAccounts, {
+      personId: account.personId,
+      type: "personal",
+      title: `垫付款 · ${account.title} 第${bill.periodNo}期`,
+      principalCents: amount,
+      remainingPrincipalCents: amount,
+      interestType: "none",
+      startDate: advanceDate ?? today(),
+      origin: "advance",
+      note: `由「${account.title}」第 ${bill.periodNo} 期垫付生成`,
+    });
 
     // 2. 垫付流水（bill_id UNIQUE 幂等）
-    const [advIns] = await tx
-      .insert(advances)
-      .values({
-        personId: account.personId,
-        billId,
-        amountCents: amount,
-        advanceDate: advanceDate ?? today(),
-        generatedAccountId,
-      })
-      .returning({ id: advances.id });
-    const advanceId = advIns.id;
+    const advanceId = await insertAndGetId(tx, advances, {
+      personId: account.personId,
+      billId,
+      amountCents: amount,
+      advanceDate: advanceDate ?? today(),
+      generatedAccountId,
+    });
 
     // 3. 账单标记已垫付
     await tx

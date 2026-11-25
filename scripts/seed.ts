@@ -7,20 +7,13 @@ import { config } from "dotenv";
 config({ path: ".env.local" });
 config();
 
-import { drizzle } from "drizzle-orm/postgres-js";
-import postgres from "postgres";
+import { getDb, closeDb } from "../src/server/db/client";
+import { insertAndGetId } from "../src/server/db/helpers";
 import * as schema from "../src/server/db/schema";
 import { generateBills } from "../src/server/services/installment-service";
 
 async function main() {
-  const url = process.env.DATABASE_URL;
-  if (!url) {
-    console.error("缺少 DATABASE_URL");
-    process.exit(1);
-  }
-  const useSsl = process.env.DB_SSL !== "false";
-  const sql = postgres(url, { prepare: false, max: 1, ssl: useSsl ? "require" : false });
-  const db = drizzle(sql, { schema });
+  const db = getDb();
 
   // 演示数据归属到管理员账号
   const [adminUser] = await db.select({ id: schema.users.id }).from(schema.users).limit(1);
@@ -31,17 +24,13 @@ async function main() {
   const ownerId = adminUser.id;
 
   // 欠款人
-  const [p1] = await db
-    .insert(schema.persons)
-    .values({
-      ownerUserId: ownerId,
-      name: "张三",
-      contact: "138****0001",
-      note: "大学同学",
-      defaultRepayDay: 15,
-    })
-    .returning({ id: schema.persons.id });
-  const personId = p1.id;
+  const personId = await insertAndGetId(db, schema.persons, {
+    ownerUserId: ownerId,
+    name: "张三",
+    contact: "138****0001",
+    note: "大学同学",
+    defaultRepayDay: 15,
+  });
 
   // 分期：招行 e 招贷 24000 元 / 12 期
   const bills = generateBills({
@@ -50,21 +39,17 @@ async function main() {
     firstDueDate: "2026-08-15",
     interestPerMonthCents: 12000,
   });
-  const [acc] = await db
-    .insert(schema.debtAccounts)
-    .values({
-      personId,
-      type: "installment",
-      title: "招行 e 招贷",
-      source: "招商银行",
-      principalCents: 2400000,
-      remainingPrincipalCents: 2400000,
-      interestType: "none",
-      startDate: "2026-07-15",
-      termMonths: 12,
-    })
-    .returning({ id: schema.debtAccounts.id });
-  const accountId = acc.id;
+  const accountId = await insertAndGetId(db, schema.debtAccounts, {
+    personId,
+    type: "installment",
+    title: "招行 e 招贷",
+    source: "招商银行",
+    principalCents: 2400000,
+    remainingPrincipalCents: 2400000,
+    interestType: "none",
+    startDate: "2026-07-15",
+    termMonths: 12,
+  });
   await db.insert(schema.installmentBills).values(
     bills.map((b) => ({
       accountId,
@@ -91,7 +76,7 @@ async function main() {
   });
 
   console.log("[seed] 完成：1 个欠款人、1 笔 12 期分期、1 笔年化个欠");
-  await sql.end();
+  await closeDb();
 }
 
 main().catch(async (err) => {

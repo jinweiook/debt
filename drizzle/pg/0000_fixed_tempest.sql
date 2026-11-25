@@ -89,9 +89,11 @@ CREATE TABLE "repayments" (
 CREATE TABLE "users" (
 	"id" uuid PRIMARY KEY NOT NULL,
 	"username" varchar(64) NOT NULL,
-	"email" varchar(255) NOT NULL,
+	"password_hash" varchar(255) NOT NULL,
 	"role" varchar(16) DEFAULT 'user' NOT NULL,
 	"status" varchar(16) DEFAULT 'active' NOT NULL,
+	"last_login_at" timestamp (3),
+	"token_version" integer DEFAULT 0 NOT NULL,
 	"created_at" timestamp (3) DEFAULT now() NOT NULL,
 	"updated_at" timestamp (3) DEFAULT now() NOT NULL
 );
@@ -108,5 +110,4 @@ CREATE INDEX "idx_rep_person" ON "repayments" USING btree ("person_id","repaid_a
 CREATE INDEX "idx_rep_bill" ON "repayments" USING btree ("bill_id");--> statement-breakpoint
 CREATE INDEX "idx_rep_account" ON "repayments" USING btree ("account_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "uk_users_username" ON "users" USING btree ("username");--> statement-breakpoint
-CREATE UNIQUE INDEX "uk_users_email" ON "users" USING btree ("email");--> statement-breakpoint
 CREATE INDEX "idx_users_status" ON "users" USING btree ("status");

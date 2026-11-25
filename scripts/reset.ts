@@ -1,36 +1,29 @@
 /**
- * 重置开发数据库：清空业务表 + 重置 bigserial 自增。
- * 注意：Supabase Auth 中的账号不会被清空，需要另用 Supabase 控制台手动清理。
- * 用法：./node_modules/.bin/tsx scripts/reset.ts
+ * 重置开发数据库：清空所有表（含 users），自增归 1。
+ * 用法：npm run db:reset
  */
 import { config } from "dotenv";
 config({ path: ".env.local" });
 config();
 
-import postgres from "postgres";
+import { isMysql } from "../src/server/db/dialect";
+import { rawQuery, closeDb } from "../src/server/db/client";
+
+const TABLES = ["advances", "repayments", "installment_bills", "debt_accounts", "persons", "users", "login_attempts"];
 
 async function main() {
-  const url = process.env.DATABASE_URL;
-  if (!url) {
-    console.error("缺少 DATABASE_URL");
-    process.exit(1);
+  if (isMysql()) {
+    // 无物理外键，直接逐表 TRUNCATE（MySQL TRUNCATE 会重置 AUTO_INCREMENT）
+    for (const t of TABLES) {
+      await rawQuery(`TRUNCATE TABLE \`${t}\``);
+    }
+  } else {
+    // TRUNCATE RESTART IDENTITY 会清空数据并把 bigserial 重置为 1
+    await rawQuery(`TRUNCATE TABLE ${TABLES.join(", ")} RESTART IDENTITY CASCADE`);
   }
-  const useSsl = process.env.DB_SSL !== "false";
-  const sql = postgres(url, { prepare: false, max: 1, ssl: useSsl ? "require" : false });
-
-  // TRUNCATE RESTART IDENTITY 会清空数据并把 bigserial 重置为 1，比 MySQL 的 AUTO_INCREMENT=1 干净
-  await sql.unsafe(`TRUNCATE TABLE
-    advances,
-    repayments,
-    installment_bills,
-    debt_accounts,
-    persons,
-    users,
-    login_attempts
-    RESTART IDENTITY CASCADE`);
 
   console.log("[reset] 已清空并重置自增");
-  await sql.end();
+  await closeDb();
   process.exit(0);
 }
 

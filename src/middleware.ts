@@ -1,19 +1,17 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { updateSession } from "@/lib/supabase/middleware";
+import { SESSION_COOKIE } from "@/lib/auth-cookie";
+import { verifySessionToken } from "@/lib/session-token";
 
 /**
- * 登录拦截 + Supabase 会话刷新（Edge Runtime，Next.js middleware 默认就是 edge）。
+ * 登录拦截（Edge Runtime）。
  *
- * - 会话刷新：每次请求都用 getUser() 向 Auth 服务器校验并续期 token，
- *   过期 token 会在这里被换成新 cookie，避免用户被莫名登出
- * - 路由保护：这里只做「有没有登录用户」的粗判断；
- *   角色与状态（admin/user、disabled）由 (protected)/layout.tsx 在 Node Runtime 精校验
- * - /api/health、/api/auth/* 保持公开，不参与刷新（登录接口自己会写 cookie）
+ * - 只做「cookie 签名是否有效 + 未过期」的粗判断，不查库
+ *   （角色、账号状态、token_version 由 (protected)/layout.tsx 在 Node Runtime 精校验）
+ * - /api/health、/api/auth/* 保持公开
  *
- * 注意：postgres-js 是 Node-only，不能在这里 import；
- * EdgeOne Pages 会自动把 middleware 编译到 edge function。
+ * 注意：Edge Runtime 不能 import mysql2/postgres 等 Node-only 模块，
+ * session-token 只用 Web Crypto，可安全运行。
  */
-
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
@@ -21,23 +19,24 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
-  const { user, response, applyCookies } = await updateSession(req);
+  const payload = await verifySessionToken(req.cookies.get(SESSION_COOKIE)?.value);
+  const loggedIn = payload !== null;
 
   if (pathname.startsWith("/login") || pathname.startsWith("/register")) {
     // 已登录用户访问登录/注册页 → 直接回首页
-    if (user) {
-      return applyCookies(NextResponse.redirect(new URL("/", req.url)));
+    if (loggedIn) {
+      return NextResponse.redirect(new URL("/", req.url));
     }
-    return response;
+    return NextResponse.next();
   }
 
-  if (!user) {
+  if (!loggedIn) {
     const url = new URL("/login", req.url);
     url.searchParams.set("next", pathname);
-    return applyCookies(NextResponse.redirect(url));
+    return NextResponse.redirect(url);
   }
 
-  return response;
+  return NextResponse.next();
 }
 
 export const config = {

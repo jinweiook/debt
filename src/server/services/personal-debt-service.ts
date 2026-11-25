@@ -1,6 +1,7 @@
 import { and, asc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "@/server/db/client";
+import { insertAndGetId } from "@/server/db/helpers";
 import { debtAccounts, type OwnerId } from "@/server/db/schema";
 import { BusinessRuleError, NotFoundError, ValidationError } from "@/server/lib/errors";
 import { monthOf } from "@/server/lib/dates";
@@ -31,9 +32,7 @@ export async function createPersonalDebt(input: PersonalDebtInput, ownerId: Owne
   const parsed = personalDebtInputSchema.parse(input);
   await assertPersonAccess(parsed.personId, ownerId);
   const db = getDb();
-  const [r] = await db
-    .insert(debtAccounts)
-    .values({
+  return insertAndGetId(db, debtAccounts, {
     personId: parsed.personId,
     type: "personal",
     title: parsed.title,
@@ -46,9 +45,7 @@ export async function createPersonalDebt(input: PersonalDebtInput, ownerId: Owne
     startDate: parsed.startDate,
     origin: "manual",
     note: parsed.note || null,
-  })
-    .returning({ id: debtAccounts.id });
-  return r.id;
+  });
 }
 
 export async function getPersonalDebt(id: number) {

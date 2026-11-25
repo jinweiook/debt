@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { login } from "@/server/services/auth-service";
-import { createClient } from "@/lib/supabase/server";
+import { SESSION_COOKIE, sessionCookieOptions } from "@/lib/auth-cookie";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,8 +15,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, message: "账号和密码不能为空" }, { status: 400 });
     }
 
-    const supabase = await createClient();
-    const result = await login(supabase, username, password);
+    const result = await login(username, password);
     if (!result.ok) {
       return NextResponse.json(
         { ok: false, message: result.message, remainingSeconds: result.remainingSeconds },
@@ -24,8 +23,9 @@ export async function POST(req: Request) {
       );
     }
 
-    // 会话 cookie 由 @supabase/ssr 的 cookie 适配器写入，这里不要再手动 set
-    return NextResponse.json({ ok: true });
+    const res = NextResponse.json({ ok: true });
+    res.cookies.set(SESSION_COOKIE, result.token, sessionCookieOptions());
+    return res;
   } catch (err) {
     console.error("[api/auth/login]", err);
     return NextResponse.json(

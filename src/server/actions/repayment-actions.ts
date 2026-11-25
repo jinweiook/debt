@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createRepayment, previewRepayment, buildOrderedTargets } from "@/server/services/repayment-service";
+import { createRepayment, previewRepayment, buildOrderedTargets, deleteRepayments } from "@/server/services/repayment-service";
 import { markBillAdvanced } from "@/server/services/advance-service";
 import { assertPersonAccess } from "@/server/services/installment-service";
 import { invalidateOverviewStats } from "@/server/services/stats-service";
@@ -49,6 +49,20 @@ export async function listRepaymentTargetsAction(
     await assertPersonAccess(personId, auth.ownerId);
     const targets = await buildOrderedTargets(personId, null);
     return { ok: true, data: targets };
+  } catch (err) {
+    return { ok: false, error: toActionError(err) };
+  }
+}
+
+export async function deleteRepaymentsAction(ids: number[], personId: number): Promise<ActionResult<null>> {
+  try {
+    const auth = await requireAuth();
+    await deleteRepayments(ids, auth.ownerId);
+    await clearStatsCache();
+    revalidatePath(`/persons/${personId}`);
+    revalidatePath("/");
+    revalidatePath("/loans");
+    return { ok: true, data: null };
   } catch (err) {
     return { ok: false, error: toActionError(err) };
   }

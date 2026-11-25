@@ -6,7 +6,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MoneyText } from "@/components/ui/money-text";
 import { BillTable } from "@/components/features/installment/bill-table";
+import { InstallmentAccountActions } from "@/components/features/installment/installment-account-actions";
 import { InterestBadge } from "@/components/features/personal/interest-badge";
+import { DeleteDebtButton } from "@/components/features/personal/delete-debt-button";
+import { RepaymentTable, type RepaymentRow } from "@/components/features/repayment/repayment-table";
 import { getLoanAccountDetail } from "@/server/services/loan-service";
 import { virtualAccruedInterest } from "@/server/services/interest-service";
 import { getAuthContext } from "@/server/lib/auth-context";
@@ -65,15 +68,41 @@ export default async function LoanDetailPage({ params }: { params: Promise<{ id:
         ].filter(Boolean).join(" · ") || undefined}
         back="/loans"
         actions={
-          <Link
-            href={
-              isInstallment
-                ? `/repayments/new?personId=${person.id}`
-                : `/repayments/new?personId=${person.id}&targetType=personal&targetId=${account.id}`
-            }
-          >
-            <Button>记一笔还款</Button>
-          </Link>
+          <div className="flex items-center gap-2">
+            {isInstallment && (
+              <InstallmentAccountActions
+                account={{
+                  id: account.id,
+                  title: account.title,
+                  source: account.source,
+                  startDate: account.startDate,
+                  note: account.note,
+                  interestMode: account.interestMode,
+                  annualRateBps: account.annualRateBps,
+                  termMonths: account.termMonths,
+                }}
+                personId={person.id}
+              />
+            )}
+            {!isInstallment && (
+              <DeleteDebtButton
+                accountId={account.id}
+                personId={person.id}
+                title={account.title}
+                isAdvanceGenerated={account.origin === "advance"}
+                size="md"
+              />
+            )}
+            <Link
+              href={
+                isInstallment
+                  ? `/repayments/new?personId=${person.id}`
+                  : `/repayments/new?personId=${person.id}&targetType=personal&targetId=${account.id}`
+              }
+            >
+              <Button>记一笔还款</Button>
+            </Link>
+          </div>
         }
       />
 
@@ -128,47 +157,24 @@ export default async function LoanDetailPage({ params }: { params: Promise<{ id:
         {/* 还款流水 */}
         <Card>
           <CardTitle className="mb-3">还款流水（{repayments.length}）</CardTitle>
-          {repayments.length === 0 ? (
-            <p className="py-8 text-center text-sm text-text-dim">暂无还款记录</p>
-          ) : (
-            <div className="overflow-x-auto -mx-5 px-5">
-              <table className="w-full min-w-[560px] text-sm">
-                <thead>
-                  <tr className="text-left text-xs text-text-dim border-b border-border">
-                    <th className="py-2.5 pr-3 font-medium">日期</th>
-                    <th className="py-2.5 pr-3 font-medium">归还对象</th>
-                    <th className="py-2.5 pr-3 font-medium text-right">金额</th>
-                    <th className="py-2.5 pr-3 font-medium text-right">其中利息</th>
-                    <th className="py-2.5 pr-3 font-medium text-right">其中本金</th>
-                    <th className="py-2.5 font-medium">备注</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[...repayments].reverse().map((r) => (
-                    <tr key={r.id} className="border-b border-border/50">
-                      <td className="py-3 pr-3 tnum text-text-dim">{r.repaidAt}</td>
-                      <td className="py-3 pr-3">
-                        {r.targetType === "bill" ? (
-                          <span>
-                            {account.title} · 第
-                            {bills?.find((b) => b.id === r.billId)?.periodNo ?? "-"}
-                            期
-                          </span>
-                        ) : (
-                          <span>{account.title}</span>
-                        )}
-                        {r.batchId && <Badge tone="purple" className="ml-2">合并分配</Badge>}
-                      </td>
-                      <td className="py-3 pr-3 text-right"><MoneyText cents={r.amountCents} prefix="" /></td>
-                      <td className="py-3 pr-3 text-right tnum text-text-dim">{formatCents(r.interestPartCents)}</td>
-                      <td className="py-3 pr-3 text-right tnum text-text-dim">{formatCents(r.principalPartCents)}</td>
-                      <td className="py-3 text-text-dim text-xs">{r.note}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <RepaymentTable
+            personId={person.id}
+            rows={repayments.map(
+              (r): RepaymentRow => ({
+                id: r.id,
+                repaidAt: r.repaidAt,
+                targetLabel:
+                  r.targetType === "bill"
+                    ? `${account.title} · 第${bills?.find((b) => b.id === r.billId)?.periodNo ?? "-"}期`
+                    : account.title,
+                hasBatch: r.batchId != null,
+                amountCents: r.amountCents,
+                interestPartCents: r.interestPartCents,
+                principalPartCents: r.principalPartCents,
+                note: r.note,
+              }),
+            )}
+          />
         </Card>
       </div>
     </AppShell>

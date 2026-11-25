@@ -1,6 +1,7 @@
 import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "@/server/db/client";
+import { insertAndGetId } from "@/server/db/helpers";
 import { persons, type OwnerId } from "@/server/db/schema";
 import { NotFoundError } from "@/server/lib/errors";
 import { getOrSet, invalidateCache, invalidateNamespace } from "@/server/redis/cache";
@@ -58,18 +59,15 @@ export async function getPerson(id: number, ownerId: OwnerId) {
 
 export async function createPerson(input: PersonInput, ownerId: string) {
   const db = getDb();
-  const [row] = await db
-    .insert(persons)
-    .values({
-      ownerUserId: ownerId,
-      name: input.name,
-      note: input.note || null,
-      contact: input.contact || null,
-      defaultRepayDay: input.defaultRepayDay ?? null,
-    })
-    .returning({ id: persons.id });
+  const id = await insertAndGetId(db, persons, {
+    ownerUserId: ownerId,
+    name: input.name,
+    note: input.note || null,
+    contact: input.contact || null,
+    defaultRepayDay: input.defaultRepayDay ?? null,
+  });
   await invalidatePersonsCache();
-  return getPerson(row.id, null);
+  return getPerson(id, null);
 }
 
 export async function updatePerson(id: number, input: PersonInput, ownerId: OwnerId) {

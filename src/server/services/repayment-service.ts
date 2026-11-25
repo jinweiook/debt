@@ -2,12 +2,14 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { z } from "zod";
 import { getDb, type Db } from "@/server/db/client";
+import { insertAndGetId } from "@/server/db/helpers";
 import { debtAccounts, installmentBills, repayments, type OwnerId } from "@/server/db/schema";
 import { BusinessRuleError, NotFoundError, ValidationError } from "@/server/lib/errors";
 import { today } from "@/server/lib/dates";
 import { allocateRepayment, type Allocation, type SplitTarget } from "@/lib/repayment-split";
 import { accrueAccountInterest, interestPayable } from "./interest-service";
 import { recomputeDynamicBills, assertPersonAccess } from "./installment-service";
+import { recomputeFixedInstallmentAccount } from "./deletion-service";
 
 export const repaymentInputSchema = z.object({
   personId: z.number().int().positive(),
@@ -185,22 +187,19 @@ export async function createRepayment(input: RepaymentInput, ownerId: OwnerId) {
     // 记录涉及的分期账户，提交后做后续账单重算
     const touchedInstallmentAccounts = new Set<number>();
     for (const r of allocation.results) {
-      const [ins] = await tx
-        .insert(repayments)
-        .values({
-          personId: parsed.personId,
-          targetType: r.kind,
-          billId: r.kind === "bill" ? r.id : null,
-          accountId: r.kind === "personal" ? r.id : null,
-          amountCents: r.applied,
-          interestPartCents: r.interestPart,
-          principalPartCents: r.principalPart,
-          batchId,
-          repaidAt,
-          note: parsed.note || null,
-        })
-        .returning({ id: repayments.id });
-      insertedIds.push(ins.id);
+      const insId = await insertAndGetId(tx, repayments, {
+        personId: parsed.personId,
+        targetType: r.kind,
+        billId: r.kind === "bill" ? r.id : null,
+        accountId: r.kind === "personal" ? r.id : null,
+        amountCents: r.applied,
+        interestPartCents: r.interestPart,
+        principalPartCents: r.principalPart,
+        batchId,
+        repaidAt,
+        note: parsed.note || null,
+      });
+      insertedIds.push(insId);
 
       if (r.kind === "bill") {
         const [bill] = await tx.select().from(installmentBills).where(eq(installmentBills.id, r.id)).limit(1);
@@ -268,4 +267,91 @@ export async function listRepaymentsByPerson(personId: number) {
     .from(repayments)
     .where(eq(repayments.personId, personId))
     .orderBy(asc(repayments.repaidAt), asc(repayments.id));
+}
+
+/**
+ * 删除还款流水并回滚抵扣（单事务，支持批量）。
+ * 回滚规则：
+ * - bill 类：从该期账单减去利息/本金抵扣，重算状态（已垫付账单只减金额、保持 advanced）
+ * - personal 类：剩余本金/计提利息加回，已付利息扣减，状态按余额重算
+ * - 涉及的分期账户：dynamic 重算后续账单；fixed 按账单汇总重算
+ * 先按目标分组累计、再一次性落库，避免同人同账单多笔删除时的中间态覆盖。
+ */
+export async function deleteRepayments(ids: number[], ownerId: OwnerId): Promise<void> {
+  const uniqueIds = [...new Set(ids)].filter((n) => Number.isInteger(n) && n > 0);
+  if (uniqueIds.length === 0) throw new ValidationError("请选择要删除的还款记录");
+  const db = getDb();
+
+  await db.transaction(async (tx) => {
+    const rows = await tx.select().from(repayments).where(inArray(repayments.id, uniqueIds));
+    if (rows.length !== uniqueIds.length) throw new NotFoundError("部分还款记录不存在");
+    for (const personId of new Set(rows.map((r) => r.personId))) {
+      await assertPersonAccess(personId, ownerId);
+    }
+
+    // 1. 按目标分组累计
+    const billDelta = new Map<number, { interest: number; principal: number }>();
+    const accountDelta = new Map<number, { interest: number; principal: number }>();
+    for (const r of rows) {
+      const map = r.targetType === "bill" ? billDelta : accountDelta;
+      const key = (r.targetType === "bill" ? r.billId : r.accountId)!;
+      const cur = map.get(key) ?? { interest: 0, principal: 0 };
+      cur.interest += r.interestPartCents;
+      cur.principal += r.principalPartCents;
+      map.set(key, cur);
+    }
+
+    // 2. 回滚账单
+    const touchedInstallmentAccounts = new Set<number>();
+    for (const [billId, d] of billDelta) {
+      const [bill] = await tx.select().from(installmentBills).where(eq(installmentBills.id, billId)).limit(1);
+      if (!bill) continue; // 账单已随分期删除时不应出现（流水会被级联删掉），防御性跳过
+      const paidInterest = Math.max(bill.paidInterestCents - d.interest, 0);
+      const paidPrincipal = Math.max(bill.paidPrincipalCents - d.principal, 0);
+      const paid = paidInterest + paidPrincipal;
+      // 已垫付账单：只减金额，保持 advanced
+      const status =
+        bill.advanced === 1 ? "advanced" : paid === 0 ? "pending" : paid >= bill.totalCents ? "paid" : "partial";
+      await tx
+        .update(installmentBills)
+        .set({ paidCents: paid, paidInterestCents: paidInterest, paidPrincipalCents: paidPrincipal, status })
+        .where(eq(installmentBills.id, billId));
+      touchedInstallmentAccounts.add(bill.accountId);
+    }
+
+    // 3. 回滚个人欠款账户
+    for (const [accountId, d] of accountDelta) {
+      const [acc] = await tx.select().from(debtAccounts).where(eq(debtAccounts.id, accountId)).limit(1);
+      if (!acc) continue;
+      const remainingPrincipal = acc.remainingPrincipalCents + d.principal;
+      const accruedAfter = acc.accruedInterestCents + d.interest;
+      const paidInterest = Math.max(acc.paidInterestCents - d.interest, 0);
+      const fixedRemaining = acc.interestType === "fixed" ? Math.max((acc.fixedInterestCents ?? 0) - paidInterest, 0) : 0;
+      const settled = remainingPrincipal === 0 && accruedAfter === 0 && fixedRemaining === 0;
+      await tx
+        .update(debtAccounts)
+        .set({
+          remainingPrincipalCents: remainingPrincipal,
+          accruedInterestCents: accruedAfter,
+          paidInterestCents: paidInterest,
+          status: settled ? "settled" : "open",
+          updatedAt: new Date(),
+        })
+        .where(eq(debtAccounts.id, accountId));
+    }
+
+    // 4. 重算涉及的分期账户
+    for (const accountId of touchedInstallmentAccounts) {
+      const [a] = await tx.select().from(debtAccounts).where(eq(debtAccounts.id, accountId)).limit(1);
+      if (!a) continue;
+      if (a.interestMode === "dynamic") {
+        await recomputeDynamicBills(tx as unknown as Db, accountId);
+      } else {
+        await recomputeFixedInstallmentAccount(tx as unknown as Db, accountId);
+      }
+    }
+
+    // 5. 删流水
+    await tx.delete(repayments).where(inArray(repayments.id, uniqueIds));
+  });
 }

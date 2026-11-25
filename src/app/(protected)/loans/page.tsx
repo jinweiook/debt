@@ -1,10 +1,10 @@
 import Link from "next/link";
 import { AppShell, PageHeader } from "@/components/layout/app-shell";
 import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { MoneyText } from "@/components/ui/money-text";
+import { LoansTable, type LoanRow } from "@/components/features/loan/loans-table";
 import { listLoanAccounts } from "@/server/services/loan-service";
 import { getAuthContext } from "@/server/lib/auth-context";
 import { getDb } from "@/server/db/client";
@@ -94,80 +94,23 @@ export default async function LoansPage({
           </Card>
         ) : (
           <Card>
-            <div className="overflow-x-auto -mx-5 px-5">
-              <table className="w-full min-w-[720px] text-sm">
-                <thead>
-                  <tr className="text-left text-xs text-text-dim border-b border-border">
-                    <th className="py-2.5 pr-3 font-medium">类型</th>
-                    <th className="py-2.5 pr-3 font-medium">标题</th>
-                    <th className="py-2.5 pr-3 font-medium">欠款人</th>
-                    {isAdmin && <th className="py-2.5 pr-3 font-medium">归属客户</th>}
-                    <th className="py-2.5 pr-3 font-medium">状态</th>
-                    <th className="py-2.5 pr-3 font-medium text-right">剩余应还</th>
-                    <th className="py-2.5 font-medium text-right">操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((r) => {
-                    const acc = r.account;
-                    return (
-                      <tr key={acc.id} className="border-b border-border/50 transition-fast hover:bg-white/[0.03]">
-                        <td className="py-3 pr-3">
-                          {acc.type === "installment" ? <Badge tone="accent">分期</Badge> : <Badge tone="purple">个人</Badge>}
-                        </td>
-                        <td className="py-3 pr-3">
-                          <Link href={`/loans/${acc.id}`} className="font-medium hover:text-accent transition-fast">
-                            {acc.title}
-                          </Link>
-                          {acc.source && <span className="text-xs text-text-dim ml-1.5">{acc.source}</span>}
-                          {acc.type === "installment" && (
-                            <span className="text-xs text-text-dim ml-1.5 tnum">共 {acc.termMonths} 期</span>
-                          )}
-                        </td>
-                        <td className="py-3 pr-3">
-                          <Link href={`/persons/${acc.personId}`} className="text-text-dim hover:text-accent transition-fast">
-                            {r.personName}
-                          </Link>
-                        </td>
-                        {isAdmin && (
-                          <td className="py-3 pr-3 text-text-dim">
-                            {ownerNames.get(r.ownerUserId) ?? "-"}
-                          </td>
-                        )}
-                        <td className="py-3 pr-3">
-                          {acc.status === "open" ? (
-                            <Badge tone="warning">进行中</Badge>
-                          ) : acc.status === "settled" ? (
-                            <Badge tone="success">已结清</Badge>
-                          ) : (
-                            <Badge tone="dim">已关闭</Badge>
-                          )}
-                        </td>
-                        <td className="py-3 pr-3 text-right">
-                          <MoneyText cents={r.remainingCents} prefix="" />
-                        </td>
-                        <td className="py-3">
-                          <div className="flex justify-end gap-2">
-                            <Link href={`/loans/${acc.id}`}>
-                              <Button size="sm" variant="secondary">查看详情</Button>
-                            </Link>
-                            <Link
-                              href={
-                                acc.type === "personal"
-                                  ? `/repayments/new?personId=${acc.personId}&targetType=personal&targetId=${acc.id}`
-                                  : `/repayments/new?personId=${acc.personId}`
-                              }
-                            >
-                              <Button size="sm">记还款</Button>
-                            </Link>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <LoansTable
+              isAdmin={isAdmin}
+              rows={rows.map(
+                (r): LoanRow => ({
+                  id: r.account.id,
+                  type: r.account.type,
+                  title: r.account.title,
+                  source: r.account.source,
+                  termMonths: r.account.termMonths,
+                  personId: r.account.personId,
+                  personName: r.personName,
+                  ownerName: isAdmin ? ownerNames.get(r.ownerUserId) : undefined,
+                  status: r.account.status,
+                  remainingCents: r.remainingCents,
+                }),
+              )}
+            />
           </Card>
         )}
       </div>

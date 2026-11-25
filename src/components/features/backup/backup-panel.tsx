@@ -7,6 +7,7 @@ import { Card, CardTitle, CardDescription } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
+import { useSession } from "@/components/layout/session";
 import { validateBackupAction, clearAllDataAction } from "@/server/actions/backup-actions";
 
 interface Preview {
@@ -21,6 +22,7 @@ interface Preview {
 export function BackupPanel() {
   const { toast } = useToast();
   const router = useRouter();
+  const session = useSession();
   const fileRef = useRef<HTMLInputElement>(null);
   const [rawJson, setRawJson] = useState<unknown>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -96,6 +98,22 @@ export function BackupPanel() {
           </a>
         </div>
       </Card>
+
+      {session?.isAdmin && (
+        <Card className="space-y-3">
+          <CardTitle>导出 SQL 数据</CardTitle>
+          <CardDescription>
+            导出全部数据表的<span className="text-text">建表结构</span>（CREATE TABLE / 索引）与
+            <span className="text-text">全部数据</span>（INSERT），生成 .sql 文件，可用 mysql 或 psql 直接恢复。
+          </CardDescription>
+          <div className="flex flex-wrap items-center gap-2">
+            <a href="/api/export/sql" download>
+              <Button variant="secondary">下载 SQL 文件</Button>
+            </a>
+            <span className="text-xs text-text-dim">含账号表，仅管理员可导出</span>
+          </div>
+        </Card>
+      )}
 
       <Card className="space-y-3">
         <CardTitle>导入备份</CardTitle>

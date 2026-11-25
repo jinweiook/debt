@@ -8,8 +8,7 @@ config({ path: ".env.local" });
 config();
 
 import { eq } from "drizzle-orm";
-import postgres from "postgres";
-import { drizzle } from "drizzle-orm/postgres-js";
+import { getDb, closeDb } from "../src/server/db/client";
 import { debtAccounts, installmentBills, persons as personsTable, users as usersTable } from "../src/server/db/schema";
 import { personStats, overviewStats } from "../src/server/services/stats-service";
 import { previewRepayment, createRepayment, listRepaymentsByPerson } from "../src/server/services/repayment-service";
@@ -17,7 +16,6 @@ import { markBillAdvanced } from "../src/server/services/advance-service";
 import { exportSnapshot, validateSnapshot, importSnapshot, clearAllData } from "../src/server/services/backup-service";
 import { virtualAccruedInterest } from "../src/server/services/interest-service";
 import { centsToYuan } from "../src/server/lib/money";
-import { createAdminClient } from "../src/lib/supabase/admin";
 
 let passed = 0;
 let failed = 0;
@@ -32,19 +30,7 @@ function check(name: string, cond: boolean, detail = "") {
 }
 
 async function main() {
-  const url = process.env.DATABASE_URL;
-  if (!url) {
-    console.error("缺少 DATABASE_URL");
-    process.exit(1);
-  }
-  const useSsl = process.env.DB_SSL !== "false";
-  const sql = postgres(url, { prepare: false, max: 1, ssl: useSsl ? "require" : false });
-
-  // 让服务层共用同一 sql 客户端
-  globalThis.__debtSql = sql as any;
-
-  const db = drizzle(sql);
-  globalThis.__debtDb = db as any;
+  const db = getDb();
 
   // 用名字查最新一个欠款人（seed.ts 写的是 "张三"），避免不同 DB 自增 ID 不可控
   const [person] = await db.select().from(personsTable).orderBy(personsTable.id).limit(1);
@@ -59,9 +45,13 @@ async function main() {
   console.log("\n== 1. 初始统计 ==");
   let stats = await personStats(personId);
   console.log(`  银行剩余 ${centsToYuan(stats.installmentRemaining)} / 个欠 ${centsToYuan(stats.personalRemaining)} / 总计 ${centsToYuan(stats.totalOutstanding)}`);
-  // 分期 24000 + 利息 120*12=1440 → 25440；个欠 5000（当月无计提）
+  // 分期 24000 + 利息 120*12=1440 → 25440
   check("银行剩余 = 25440", stats.installmentRemaining === 2544000, `实际 ${stats.installmentRemaining}`);
-  check("个欠剩余 = 5000", stats.personalRemaining === 500000, `实际 ${stats.personalRemaining}`);
+  // 个欠 5000 + 年化 6% 懒计提（25 元/月，计提月数随当前日期动态变化）
+  const { currentMonth, diffMonths } = await import("../src/server/lib/dates");
+  const accruedMonths = Math.max(diffMonths(currentMonth(), "2026-08"), 0);
+  const expectedPersonal = 500000 + 2500 * accruedMonths;
+  check(`个欠剩余 = ${centsToYuan(expectedPersonal)}（含 ${accruedMonths} 个月计提）`, stats.personalRemaining === expectedPersonal, `实际 ${stats.personalRemaining}`);
 
   console.log("\n== 2. 部分还款：先息后本 ==");
   const bill1 = (await db.select().from(installmentBills).where(eq(installmentBills.periodNo, 1)))[0];
@@ -112,12 +102,22 @@ async function main() {
 
   console.log("\n== 5. 年化利息懒计提 ==");
   const personalAcc = (await db.select().from(debtAccounts).where(eq(debtAccounts.title, "直接借出")))[0];
-  await db.update(debtAccounts).set({ lastAccrualMonth: "2026-05" }).where(eq(debtAccounts.id, personalAcc.id));
+  // 把计提起点回拨到 3 个月前、已计提清零，验证虚拟计提 = 75 元（25 元/月 × 3），随后还原
+  const nowMonth = currentMonth();
+  const [y, m] = nowMonth.split("-").map(Number);
+  const backMonth = `${m > 3 ? y : y - 1}-${String(m > 3 ? m - 3 : m + 9).padStart(2, "0")}`;
+  const savedAccrual = { month: personalAcc.lastAccrualMonth, cents: personalAcc.accruedInterestCents };
+  await db
+    .update(debtAccounts)
+    .set({ lastAccrualMonth: backMonth, accruedInterestCents: 0 })
+    .where(eq(debtAccounts.id, personalAcc.id));
   const backfilled = (await db.select().from(debtAccounts).where(eq(debtAccounts.id, personalAcc.id)))[0];
   const vInterest = virtualAccruedInterest(backfilled);
-  // 5000 × 6% / 12 = 25 元/月 × 3 个月（5→8）
   check("3 个月利息 = 75 元", vInterest === 7500, `实际 ${vInterest}`);
-  await db.update(debtAccounts).set({ lastAccrualMonth: "2026-08" }).where(eq(debtAccounts.id, personalAcc.id));
+  await db
+    .update(debtAccounts)
+    .set({ lastAccrualMonth: savedAccrual.month, accruedInterestCents: savedAccrual.cents })
+    .where(eq(debtAccounts.id, personalAcc.id));
 
   console.log("\n== 6. 统计一致性 ==");
   stats = await personStats(personId);
@@ -151,11 +151,8 @@ async function main() {
 
   console.log("\n== 8. 动态年化利息（等额本金：还本金后下期利息自动下降） ==");
   // 用全新欠款人隔离
-  const [dyPersonIns] = await db
-    .insert(personsTable)
-    .values({ name: "动态测试人" + Date.now(), ownerUserId: adminId })
-    .returning({ id: personsTable.id });
-  const dyPersonId = dyPersonIns.id;
+  const { insertAndGetId } = await import("../src/server/db/helpers");
+  const dyPersonId = await insertAndGetId(db, personsTable, { name: "动态测试人" + Date.now(), ownerUserId: adminId });
   // 70000 / 12 / 2.6% / 等额本金：每月本金 5833.33，利息按剩余本金算
   const dyAcc = await (await import("../src/server/services/installment-service")).createInstallmentDebt({
     personId: dyPersonId,
@@ -199,11 +196,7 @@ async function main() {
   check(`第2期利息已动态重算 = 147.66 元 (实际 ${dyBill2After.interestCents})`, dyBill2After.interestCents === dyExpected2);
 
   console.log("\n== 9. 动态年化利息（先息后本：超额还到末期本金） ==");
-  const [ioPersonIns] = await db
-    .insert(personsTable)
-    .values({ name: "先息后本测试人" + Date.now(), ownerUserId: adminId })
-    .returning({ id: personsTable.id });
-  const ioPersonId = ioPersonIns.id;
+  const ioPersonId = await insertAndGetId(db, personsTable, { name: "先息后本测试人" + Date.now(), ownerUserId: adminId });
   // 70000 / 12 / 2.6% / 先息后本：前 11 期本金=0，末期本金=70000
   const ioAcc = await (await import("../src/server/services/installment-service")).createInstallmentDebt({
     personId: ioPersonId,
@@ -242,11 +235,7 @@ async function main() {
   check(`先息后本：末期 planned 本金已重算 (实际 ${ioBill12After.principalCents})`, ioBill12After.principalCents === 6815167);
 
   console.log("\n== 10. 你的例子：先息后本 还 1318 元 = 利息 151.67 + 本金 1166.33 ==");
-  const [exPersonIns] = await db
-    .insert(personsTable)
-    .values({ name: "例子测试人" + Date.now(), ownerUserId: adminId })
-    .returning({ id: personsTable.id });
-  const exPersonId = exPersonIns.id;
+  const exPersonId = await insertAndGetId(db, personsTable, { name: "例子测试人" + Date.now(), ownerUserId: adminId });
   const exAcc = await (await import("../src/server/services/installment-service")).createInstallmentDebt({
     personId: exPersonId,
     title: "例子分期",
@@ -275,39 +264,19 @@ async function main() {
   check(`例子：bill 2 利息已重算 = 149.14 元 (实际 ${exBill2After.interestCents})`, exBill2After.interestCents === 14914);
 
   console.log("\n== 11. 多客户数据隔离 ==");
-  const { register } = await import("../src/server/services/auth-service");
+  const { register, findUserByUsername } = await import("../src/server/services/auth-service");
   const { createPerson, listPersons, getPerson } = await import("../src/server/services/person-service");
   const { NotFoundError } = await import("../src/server/lib/errors");
 
-  // 注册（或复用）一个测试客户（用 mock supabase client，因为脚本无浏览器）
-  const adminClient = createAdminClient();
-  const testEmail = "verify_user@debt.local";
-  const testPassword = "verify123";
+  // 注册（或复用）一个测试客户（自建认证，直接写 users 表）
+  const existed = await findUserByUsername("verify_user");
   let customerOwnerId: string;
-  const { data: listed } = await adminClient.auth.admin.listUsers({ page: 1, perPage: 1000 });
-  const existed = listed?.users?.find((u) => u.email?.toLowerCase() === testEmail);
   if (existed) {
     customerOwnerId = existed.id;
-    await adminClient.auth.admin.updateUserById(existed.id, { password: testPassword });
   } else {
-    const { data: created } = await adminClient.auth.admin.createUser({
-      email: testEmail,
-      password: testPassword,
-      email_confirm: true,
-    });
-    if (!created?.user?.id) throw new Error("无法在 Supabase Auth 创建测试用户");
-    customerOwnerId = created.user.id;
-  }
-  // 业务侧 profile 若缺失则补
-  const [profile] = await db.select().from(usersTable).where(eq(usersTable.id, customerOwnerId)).limit(1);
-  if (!profile) {
-    await db.insert(usersTable).values({
-      id: customerOwnerId,
-      username: "verify_user",
-      email: testEmail,
-      role: "user",
-      status: "active",
-    });
+    const reg = await register("verify_user", "verify123");
+    if (!reg.ok) throw new Error(`注册测试用户失败：${reg.message}`);
+    customerOwnerId = reg.userId;
   }
 
   // 客户名下新建欠款人，归属正确
@@ -349,8 +318,62 @@ async function main() {
   }
   check("客户对他人账单记还款被拦截", repayDenied);
 
+  console.log("\n== 12. 删除与回滚 ==");
+  const { deleteRepayments } = await import("../src/server/services/repayment-service");
+  const { deleteDebtAccounts, deletePerson } = await import("../src/server/services/deletion-service");
+  const { inArray, and: and2 } = await import("drizzle-orm");
+
+  // 12a. 删单笔还款：bill1 的 1000 元（息 120 + 本 880）回滚。
+  // 注意：第3节的批量还款曾溢出 1120 元本金到 bill1，所以删 rep1 后 bill1 剩本金已还 1120、利息已还 0
+  const seedAccId = (await db.select().from(debtAccounts).where(eq(debtAccounts.title, "招行 e 招贷")))[0].id;
+  const seedBill = async (periodNo: number) =>
+    (await db.select().from(installmentBills).where(and2(eq(installmentBills.accountId, seedAccId), eq(installmentBills.periodNo, periodNo))))[0];
+  const reps = await listRepaymentsByPerson(personId);
+  const rep1 = reps.find((r) => r.amountCents === 100000 && !r.batchId)!;
+  await deleteRepayments([rep1.id], null);
+  const bill1Rb = await seedBill(1);
+  check("删还款后第1期回到 partial", bill1Rb.status === "partial", `实际 ${bill1Rb.status}`);
+  check("第1期利息回滚为 0", bill1Rb.paidInterestCents === 0, `实际 ${bill1Rb.paidInterestCents}`);
+  check("第1期本金已还 1120（批量溢出部分）", bill1Rb.paidPrincipalCents === 112000, `实际 ${bill1Rb.paidPrincipalCents}`);
+
+  // 12b. 批量删同批还款：第1/2/3期全部恢复 pending
+  const batchIds = reps.filter((r) => r.batchId).map((r) => r.id);
+  check("同批流水 3 条", batchIds.length === 3, `实际 ${batchIds.length}`);
+  await deleteRepayments(batchIds, null);
+  const billsAfter = await db
+    .select()
+    .from(installmentBills)
+    .where(and2(eq(installmentBills.accountId, seedAccId), inArray(installmentBills.periodNo, [1, 2, 3])));
+  check("批量删除后 1/2/3 期全部 pending", billsAfter.length === 3 && billsAfter.every((b) => b.status === "pending" && b.paidCents === 0));
+  const instAcc = (await db.select().from(debtAccounts).where(eq(debtAccounts.id, seedAccId)))[0];
+  // 剩余 = 总本金 24000 - 垫付期本金 2000 = 22000（第5期仍是 advanced，垫付口径不计入待还）
+  check("分期账户剩余本金恢复 22000（扣除垫付期）", instAcc.remainingPrincipalCents === 2200000, `实际 ${instAcc.remainingPrincipalCents}`);
+
+  // 12c. 删除垫付生成的个欠：源账单恢复未垫付
+  const advAccRow = (await db.select().from(debtAccounts).where(eq(debtAccounts.title, "垫付款 · 招行 e 招贷 第5期")))[0];
+  await deleteDebtAccounts([advAccRow.id], null);
+  const bill5Rb = await seedBill(5);
+  check("源账单垫付标记已回写", bill5Rb.advanced === 0 && bill5Rb.advanceId == null && bill5Rb.status === "pending",
+    `实际 advanced=${bill5Rb.advanced} status=${bill5Rb.status}`);
+  const advGone = await db.select().from(debtAccounts).where(eq(debtAccounts.id, advAccRow.id));
+  check("垫付个欠已删除", advGone.length === 0);
+
+  // 12d. 整批删除分期：账单/还款/垫付清空
+  await deleteDebtAccounts([instAcc.id], null);
+  const billsGone = await db.select().from(installmentBills).where(eq(installmentBills.accountId, instAcc.id));
+  check("分期账单全部删除", billsGone.length === 0);
+  const repsGone = await listRepaymentsByPerson(personId);
+  check("关联还款流水全部删除", repsGone.length === 0, `实际 ${repsGone.length}`);
+
+  // 12e. 删除欠款人：级联清空
+  await deletePerson(personId, null);
+  const accsGone = await db.select().from(debtAccounts).where(eq(debtAccounts.personId, personId));
+  const personGone = await db.select().from(personsTable).where(eq(personsTable.id, personId));
+  check("欠款人账户全部删除", accsGone.length === 0);
+  check("欠款人已删除", personGone.length === 0);
+
   console.log(`\n========== 结果：${passed} 通过 / ${failed} 失败 ==========\n`);
-  await sql.end();
+  await closeDb();
   process.exit(failed > 0 ? 1 : 0);
 }
 

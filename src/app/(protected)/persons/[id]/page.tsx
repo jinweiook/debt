@@ -9,8 +9,12 @@ import { MoneyText } from "@/components/ui/money-text";
 import { StatCards } from "@/components/features/overview/stat-cards";
 import { MonthlyForecastChart } from "@/components/features/overview/monthly-forecast";
 import { BillTable } from "@/components/features/installment/bill-table";
+import { InstallmentAccountActions } from "@/components/features/installment/installment-account-actions";
 import { InterestBadge } from "@/components/features/personal/interest-badge";
 import { CloseDebtButton } from "@/components/features/personal/close-debt-button";
+import { DeleteDebtButton } from "@/components/features/personal/delete-debt-button";
+import { PersonActions } from "@/components/features/person/person-actions";
+import { RepaymentTable, type RepaymentRow } from "@/components/features/repayment/repayment-table";
 import { getPerson } from "@/server/services/person-service";
 import { personStats, monthlyForecast } from "@/server/services/stats-service";
 import { virtualAccruedInterest } from "@/server/services/interest-service";
@@ -69,13 +73,34 @@ export default async function PersonDetailPage({ params }: { params: Promise<{ i
         description={[person.contact, person.note].filter(Boolean).join(" · ") || undefined}
         back="/"
         actions={
-          <Link href={`/repayments/new?personId=${personId}`}>
-            <Button>记一笔还款</Button>
-          </Link>
+          <div className="flex items-center gap-2">
+            <PersonActions
+              person={{
+                id: person.id,
+                name: person.name,
+                contact: person.contact,
+                note: person.note,
+                defaultRepayDay: person.defaultRepayDay,
+              }}
+              redirectAfterDelete="/"
+            />
+            <Link href={`/repayments/new?personId=${personId}`}>
+              <Button>记一笔还款</Button>
+            </Link>
+          </div>
         }
       />
 
       <div className="space-y-4 md:space-y-6">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Link href={`/debts/installment/new?personId=${personId}`}>
+            <Button variant="secondary" size="sm">+ 新增分期</Button>
+          </Link>
+          <Link href={`/debts/personal/new?personId=${personId}`}>
+            <Button variant="secondary" size="sm">+ 新增个人欠款</Button>
+          </Link>
+        </div>
+
         <StatCards stats={stats} />
 
         <Tabs
@@ -86,14 +111,7 @@ export default async function PersonDetailPage({ params }: { params: Promise<{ i
               content: (
                 <div className="space-y-4">
                   {installmentAccounts.length === 0 && (
-                    <Card className="py-10 text-center text-text-dim text-sm">
-                      暂无分期记录
-                      <div className="mt-3">
-                        <Link href={`/debts/installment/new?personId=${personId}`}>
-                          <Button variant="secondary" size="sm">+ 新增分期</Button>
-                        </Link>
-                      </div>
-                    </Card>
+                    <Card className="py-10 text-center text-text-dim text-sm">暂无分期记录</Card>
                   )}
                   {installmentAccounts.map((acc) => (
                     <Card key={acc.id}>
@@ -103,9 +121,24 @@ export default async function PersonDetailPage({ params }: { params: Promise<{ i
                           {acc.source && <Badge tone="accent">{acc.source}</Badge>}
                           {statusLabel(acc.status)}
                         </div>
-                        <p className="text-sm text-text-dim tnum">
-                          共 {acc.termMonths} 期 · 本金 ¥{formatCents(acc.principalCents)}
-                        </p>
+                        <div className="flex items-center gap-3">
+                          <p className="text-sm text-text-dim tnum">
+                            共 {acc.termMonths} 期 · 本金 ¥{formatCents(acc.principalCents)}
+                          </p>
+                          <InstallmentAccountActions
+                            account={{
+                              id: acc.id,
+                              title: acc.title,
+                              source: acc.source,
+                              startDate: acc.startDate,
+                              note: acc.note,
+                              interestMode: acc.interestMode,
+                              annualRateBps: acc.annualRateBps,
+                              termMonths: acc.termMonths,
+                            }}
+                            personId={personId}
+                          />
+                        </div>
                       </div>
                       <BillTable account={acc} bills={billsByAccount.get(acc.id) ?? []} personId={personId} />
                     </Card>
@@ -119,14 +152,7 @@ export default async function PersonDetailPage({ params }: { params: Promise<{ i
               content: (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                   {personalAccounts.length === 0 && (
-                    <Card className="py-10 text-center text-text-dim text-sm lg:col-span-2">
-                      暂无个人欠款
-                      <div className="mt-3">
-                        <Link href={`/debts/personal/new?personId=${personId}`}>
-                          <Button variant="secondary" size="sm">+ 新增个人欠款</Button>
-                        </Link>
-                      </div>
-                    </Card>
+                    <Card className="py-10 text-center text-text-dim text-sm lg:col-span-2">暂无个人欠款</Card>
                   )}
                   {personalAccounts.map((acc) => {
                     const interest = virtualAccruedInterest(acc);
@@ -151,14 +177,22 @@ export default async function PersonDetailPage({ params }: { params: Promise<{ i
                               {" · "}借出 {acc.startDate}
                             </p>
                           </div>
-                          {acc.status === "open" && (
-                            <div className="flex gap-2 shrink-0">
-                              <Link href={`/repayments/new?personId=${personId}&targetType=personal&targetId=${acc.id}`}>
-                                <Button size="sm">记还款</Button>
-                              </Link>
-                              <CloseDebtButton accountId={acc.id} personId={personId} />
-                            </div>
-                          )}
+                          <div className="flex gap-2 shrink-0">
+                            {acc.status === "open" && (
+                              <>
+                                <Link href={`/repayments/new?personId=${personId}&targetType=personal&targetId=${acc.id}`}>
+                                  <Button size="sm">记还款</Button>
+                                </Link>
+                                <CloseDebtButton accountId={acc.id} personId={personId} />
+                              </>
+                            )}
+                            <DeleteDebtButton
+                              accountId={acc.id}
+                              personId={personId}
+                              title={acc.title}
+                              isAdvanceGenerated={acc.origin === "advance"}
+                            />
+                          </div>
                         </div>
                         {acc.note && <p className="mt-3 text-xs text-text-dim/80 border-t border-border pt-3">{acc.note}</p>}
                       </Card>
@@ -172,39 +206,21 @@ export default async function PersonDetailPage({ params }: { params: Promise<{ i
               label: `还款流水 (${repayments.length})`,
               content: (
                 <Card>
-                  {repayments.length === 0 ? (
-                    <p className="py-8 text-center text-sm text-text-dim">暂无还款记录</p>
-                  ) : (
-                    <div className="overflow-x-auto -mx-5 px-5">
-                      <table className="w-full min-w-[560px] text-sm">
-                        <thead>
-                          <tr className="text-left text-xs text-text-dim border-b border-border">
-                            <th className="py-2.5 pr-3 font-medium">日期</th>
-                            <th className="py-2.5 pr-3 font-medium">归还对象</th>
-                            <th className="py-2.5 pr-3 font-medium text-right">金额</th>
-                            <th className="py-2.5 pr-3 font-medium text-right">其中利息</th>
-                            <th className="py-2.5 pr-3 font-medium text-right">其中本金</th>
-                            <th className="py-2.5 font-medium">备注</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {[...repayments].reverse().map((r) => (
-                            <tr key={r.id} className="border-b border-border/50">
-                              <td className="py-3 pr-3 tnum text-text-dim">{r.repaidAt}</td>
-                              <td className="py-3 pr-3">
-                                <RepaymentTargetLabel targetType={r.targetType} billId={r.billId} accountId={r.accountId} billsByAccount={billsByAccount} accounts={accounts} />
-                                {r.batchId && <Badge tone="purple" className="ml-2">合并分配</Badge>}
-                              </td>
-                              <td className="py-3 pr-3 text-right"><MoneyText cents={r.amountCents} prefix="" /></td>
-                              <td className="py-3 pr-3 text-right tnum text-text-dim">{formatCents(r.interestPartCents)}</td>
-                              <td className="py-3 pr-3 text-right tnum text-text-dim">{formatCents(r.principalPartCents)}</td>
-                              <td className="py-3 text-text-dim text-xs">{r.note}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
+                  <RepaymentTable
+                    personId={personId}
+                    rows={repayments.map(
+                      (r): RepaymentRow => ({
+                        id: r.id,
+                        repaidAt: r.repaidAt,
+                        targetLabel: repaymentTargetLabel(r.targetType, r.billId, r.accountId, billsByAccount, accounts),
+                        hasBatch: r.batchId != null,
+                        amountCents: r.amountCents,
+                        interestPartCents: r.interestPartCents,
+                        principalPartCents: r.principalPartCents,
+                        note: r.note,
+                      }),
+                    )}
+                  />
                 </Card>
               ),
             },
@@ -220,29 +236,23 @@ export default async function PersonDetailPage({ params }: { params: Promise<{ i
   );
 }
 
-function RepaymentTargetLabel({
-  targetType,
-  billId,
-  accountId,
-  billsByAccount,
-  accounts,
-}: {
-  targetType: string;
-  billId: number | null;
-  accountId: number | null;
-  billsByAccount: Map<number, { id: number; periodNo: number; accountId: number }[]>;
-  accounts: { id: number; title: string }[];
-}) {
+function repaymentTargetLabel(
+  targetType: string,
+  billId: number | null,
+  accountId: number | null,
+  billsByAccount: Map<number, { id: number; periodNo: number; accountId: number }[]>,
+  accounts: { id: number; title: string }[],
+): string {
   if (targetType === "bill" && billId != null) {
     for (const bills of billsByAccount.values()) {
       const bill = bills.find((b) => b.id === billId);
       if (bill) {
         const acc = accounts.find((a) => a.id === bill.accountId);
-        return <span>{acc?.title} · 第{bill.periodNo}期</span>;
+        return `${acc?.title ?? "分期"} · 第${bill.periodNo}期`;
       }
     }
-    return <span>分期账单</span>;
+    return "分期账单";
   }
   const acc = accounts.find((a) => a.id === accountId);
-  return <span>{acc?.title ?? "个人欠款"}</span>;
+  return acc?.title ?? "个人欠款";
 }

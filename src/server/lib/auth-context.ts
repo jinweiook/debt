@@ -1,9 +1,8 @@
 import { resolveSession, type UserSession } from "@/server/services/auth-service";
-import { createClient } from "@/lib/supabase/server";
 import { UnauthorizedError } from "@/server/lib/errors";
 
 export interface AuthContext {
-  /** users.id，同时是 Supabase auth.users.id（UUID） */
+  /** users.id */
   userId: string;
   username: string;
   role: string;
@@ -16,10 +15,9 @@ export interface AuthContext {
   ownerId: string | null;
 }
 
-/** 从 Supabase 会话解析当前登录客户；未登录返回 null（用于页面层） */
+/** 从会话 cookie 解析当前登录客户；未登录返回 null（用于页面层） */
 export async function getAuthContext(): Promise<AuthContext | null> {
-  const supabase = await createClient();
-  const session: UserSession | null = await resolveSession(supabase);
+  const session: UserSession | null = await resolveSession();
   if (!session) return null;
   return toAuthContext(session);
 }
