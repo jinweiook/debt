@@ -149,11 +149,11 @@ async function main() {
   }
   check("损坏备份被拒绝", badJson);
 
-  console.log("\n== 8. 动态年化利息（等额本金：还本金后下期利息自动下降） ==");
+  console.log("\n== 8. 动态年化利息（等额本金 ACT/360：还本金后下期利息自动下降） ==");
   // 用全新欠款人隔离
   const { insertAndGetId } = await import("../src/server/db/helpers");
   const dyPersonId = await insertAndGetId(db, personsTable, { name: "动态测试人" + Date.now(), ownerUserId: adminId });
-  // 70000 / 12 / 2.6% / 等额本金：每月本金 5833.33，利息按剩余本金算
+  // 70000 / 12 / 2.6% / 等额本金：2026-08-01 放款，2026-09-01 首期（31天）
   const dyAcc = await (await import("../src/server/services/installment-service")).createInstallmentDebt({
     personId: dyPersonId,
     title: "等额本金分期",
@@ -165,6 +165,7 @@ async function main() {
     bills: (await import("../src/server/services/installment-service")).generateDynamicBills({
       principalCents: 7000000,
       termMonths: 12,
+      startDate: "2026-08-01",
       firstDueDate: "2026-09-01",
       annualRateBps: 260,
       plan: "equalPrincipal",
@@ -176,26 +177,25 @@ async function main() {
   const dyBill2 = dyBills[1];
   // 70000/12 = 5833.33 → 583333 cents
   check(`等额本金：第1期本金 = 5833.33 元 (实际 ${dyBill1.principalCents})`, dyBill1.principalCents === 583333);
-  // monthlyInterestCents(7000000, 260) = 15167
-  check(`等额本金：第1期利息 = 151.67 元 (实际 ${dyBill1.interestCents})`, dyBill1.interestCents === 15167);
-  // 等额本金情况下，无提前还款时第2期利息 = monthlyInterestCents(7000000-583333, 260) = monthlyInterestCents(6416667, 260)
-  // 6416667 * 260 / 120000 = 13902.78 → 13903
+  // ACT/360 (31天): round(7000000 * 260 * 31 / 3600000) = 15672
+  check(`等额本金：第1期利息(31天) = 156.72 元 (实际 ${dyBill1.interestCents})`, dyBill1.interestCents === 15672);
+  // 2026-09-01 -> 2026-10-01 (30天): round((7000000-583333) * 260 * 30 / 3600000) = 13903
   const dyExpectedBill2Initial = 13903;
-  check(`等额本金：初始第2期利息 ≈ 139.03 元 (实际 ${dyBill2.interestCents})`, dyBill2.interestCents === dyExpectedBill2Initial);
+  check(`等额本金：初始第2期利息(30天) = 139.03 元 (实际 ${dyBill2.interestCents})`, dyBill2.interestCents === dyExpectedBill2Initial);
 
-  // 还 2000 元到第 1 期：先抵利息 151.67，再冲本金 1848.33
+  // 还 2000 元到第 1 期：先抵利息 156.72，再冲本金 1843.28
   await createRepayment({ personId: dyPersonId, targetType: "bill", targetId: dyBill1.id, amountCents: 200000 }, null);
   const dyBill1After = (await db.select().from(installmentBills).where(eq(installmentBills.id, dyBill1.id)))[0];
   check("第1期已部分还清", dyBill1After.status === "partial");
-  check(`第1期利息部分 = 15167 (实际 ${dyBill1After.paidInterestCents})`, dyBill1After.paidInterestCents === 15167);
-  check(`第1期本金部分 = 184833 (实际 ${dyBill1After.paidPrincipalCents})`, dyBill1After.paidPrincipalCents === 200000 - 15167);
+  check(`第1期利息部分 = 15672 (实际 ${dyBill1After.paidInterestCents})`, dyBill1After.paidInterestCents === 15672);
+  check(`第1期本金部分 = 184328 (实际 ${dyBill1After.paidPrincipalCents})`, dyBill1After.paidPrincipalCents === 200000 - 15672);
 
-  // 第2期利息应重算：剩余本金 = 7000000 - 184833 = 6815167，月利息 = round(6815167*260/120000) = 14766
+  // 第2期利息(30天)应重算：剩余本金 = 7000000 - 184328 = 6815672，round(6815672 * 260 * 30 / 3600000) = 14767
   const dyBill2After = (await db.select().from(installmentBills).where(eq(installmentBills.id, dyBill2.id)))[0];
-  const dyExpected2 = 14766;
-  check(`第2期利息已动态重算 = 147.66 元 (实际 ${dyBill2After.interestCents})`, dyBill2After.interestCents === dyExpected2);
+  const dyExpected2 = 14767;
+  check(`第2期利息已动态重算 = 147.67 元 (实际 ${dyBill2After.interestCents})`, dyBill2After.interestCents === dyExpected2);
 
-  console.log("\n== 9. 动态年化利息（先息后本：超额还到末期本金） ==");
+  console.log("\n== 9. 动态年化利息（先息后本 ACT/360：超额还到末期本金） ==");
   const ioPersonId = await insertAndGetId(db, personsTable, { name: "先息后本测试人" + Date.now(), ownerUserId: adminId });
   // 70000 / 12 / 2.6% / 先息后本：前 11 期本金=0，末期本金=70000
   const ioAcc = await (await import("../src/server/services/installment-service")).createInstallmentDebt({
@@ -209,6 +209,7 @@ async function main() {
     bills: (await import("../src/server/services/installment-service")).generateDynamicBills({
       principalCents: 7000000,
       termMonths: 12,
+      startDate: "2026-08-01",
       firstDueDate: "2026-09-01",
       annualRateBps: 260,
       plan: "interestOnly",
@@ -218,23 +219,19 @@ async function main() {
   const ioBills = await db.select().from(installmentBills).where(eq(installmentBills.accountId, ioId)).orderBy(installmentBills.periodNo);
   check(`先息后本：前11期本金=0 (实际 bill2.principal=${ioBills[1].principalCents})`, ioBills[1].principalCents === 0);
   check(`先息后本：末期本金=70000 (实际 ${ioBills[11].principalCents})`, ioBills[11].principalCents === 7000000);
-  check(`先息后本：每期利息=151.67 (实际 ${ioBills[0].interestCents})`, ioBills[0].interestCents === 15167);
-  // 修复后：先息后本下还 2000元 到第 1 期，扣利息 151.67 后剩余 1848.33 直接充作 bill 1 的本金
-  // （之前会级联到后续账单的利息抵扣，导致本金显示为 0）
+  check(`先息后本：第1期利息(31天)=156.72 (实际 ${ioBills[0].interestCents})`, ioBills[0].interestCents === 15672);
   await createRepayment({ personId: ioPersonId, targetType: "bill", targetId: ioBills[0].id, amountCents: 200000 }, null);
   const ioBill1After = (await db.select().from(installmentBills).where(eq(installmentBills.id, ioBills[0].id)))[0];
   check(`先息后本：bill 1 已还清 (实际 status=${ioBill1After.status})`, ioBill1After.status === "paid");
-  check(`先息后本：bill 1 利息部分 = 151.67 元 (实际 ${ioBill1After.paidInterestCents})`, ioBill1After.paidInterestCents === 15167);
-  check(`先息后本：bill 1 本金部分 = 1848.33 元 (实际 ${ioBill1After.paidPrincipalCents})`, ioBill1After.paidPrincipalCents === 184833);
-  // 后续账单的利息应按 (70000 - 1848.33) × 2.6% / 12 重算
+  check(`先息后本：bill 1 利息部分 = 156.72 元 (实际 ${ioBill1After.paidInterestCents})`, ioBill1After.paidInterestCents === 15672);
+  check(`先息后本：bill 1 本金部分 = 1843.28 元 (实际 ${ioBill1After.paidPrincipalCents})`, ioBill1After.paidPrincipalCents === 184328);
+  // 第2期(30天)按 (70000 - 1843.28) × 2.6% × 30 / 360 = 147.67 元
   const ioBill2After = (await db.select().from(installmentBills).where(eq(installmentBills.id, ioBills[1].id)))[0];
-  // 6815167 × 260 / 120000 = 14766.19 → 14766
-  check(`先息后本：bill 2 利息已动态重算 ≈ 147.66 元 (实际 ${ioBill2After.interestCents})`, ioBill2After.interestCents === 14766);
-  // 末期 planned 本金 = 70000 - 1848.33 = 68151.67
+  check(`先息后本：bill 2 利息已动态重算 = 147.67 元 (实际 ${ioBill2After.interestCents})`, ioBill2After.interestCents === 14767);
   const ioBill12After = (await db.select().from(installmentBills).where(eq(installmentBills.id, ioBills[11].id)))[0];
-  check(`先息后本：末期 planned 本金已重算 (实际 ${ioBill12After.principalCents})`, ioBill12After.principalCents === 6815167);
+  check(`先息后本：末期 planned 本金已重算 (实际 ${ioBill12After.principalCents})`, ioBill12After.principalCents === 6815672);
 
-  console.log("\n== 10. 你的例子：先息后本 还 1318 元 = 利息 151.67 + 本金 1166.33 ==");
+  console.log("\n== 10. 例子：先息后本 还 1318 元 = 利息 156.72 + 本金 1161.28 ==");
   const exPersonId = await insertAndGetId(db, personsTable, { name: "例子测试人" + Date.now(), ownerUserId: adminId });
   const exAcc = await (await import("../src/server/services/installment-service")).createInstallmentDebt({
     personId: exPersonId,
@@ -247,6 +244,7 @@ async function main() {
     bills: (await import("../src/server/services/installment-service")).generateDynamicBills({
       principalCents: 7000000,
       termMonths: 12,
+      startDate: "2026-08-01",
       firstDueDate: "2026-09-01",
       annualRateBps: 260,
       plan: "interestOnly",
@@ -256,12 +254,43 @@ async function main() {
   const exBills = await db.select().from(installmentBills).where(eq(installmentBills.accountId, exId)).orderBy(installmentBills.periodNo);
   await createRepayment({ personId: exPersonId, targetType: "bill", targetId: exBills[0].id, amountCents: 131800 }, null);
   const exBill1After = (await db.select().from(installmentBills).where(eq(installmentBills.id, exBills[0].id)))[0];
-  check(`例子：bill 1 利息 = 15167 (实际 ${exBill1After.paidInterestCents})`, exBill1After.paidInterestCents === 15167);
-  check(`例子：bill 1 本金 = 116633 (实际 ${exBill1After.paidPrincipalCents})`, exBill1After.paidPrincipalCents === 116633);
-  // 下一期利息 = (70000 - 1166.33) × 2.6% / 12 = 149.14 元
+  check(`例子：bill 1 利息 = 15672 (实际 ${exBill1After.paidInterestCents})`, exBill1After.paidInterestCents === 15672);
+  check(`例子：bill 1 本金 = 116128 (实际 ${exBill1After.paidPrincipalCents})`, exBill1After.paidPrincipalCents === 116128);
+  // 下一期(30天)利息 = round((7000000 - 116128) * 260 * 30 / 3600000) = 14915
   const exBill2After = (await db.select().from(installmentBills).where(eq(installmentBills.id, exBills[1].id)))[0];
-  // 6883367 × 260 / 120000 = 14913.94 → 14914
-  check(`例子：bill 2 利息已重算 = 149.14 元 (实际 ${exBill2After.interestCents})`, exBill2After.interestCents === 14914);
+  check(`例子：bill 2 利息已重算 = 149.15 元 (实际 ${exBill2After.interestCents})`, exBill2After.interestCents === 14915);
+
+  console.log("\n== 10b. 真实 84 期 30000 元 2.6% 先息后本 ACT/360 连续还本 ==");
+  const realPersonId = await insertAndGetId(db, personsTable, { name: "84期真实案例" + Date.now(), ownerUserId: adminId });
+  const realAcc = await (await import("../src/server/services/installment-service")).createInstallmentDebt({
+    personId: realPersonId,
+    title: "84期先息后本",
+    source: "银行",
+    startDate: "2025-12-02",
+    interestMode: "dynamic",
+    annualRateBps: 260,
+    dynamicPlan: "interestOnly",
+    bills: (await import("../src/server/services/installment-service")).generateDynamicBills({
+      principalCents: 3000000,
+      termMonths: 84,
+      startDate: "2025-12-02",
+      firstDueDate: "2025-12-21",
+      annualRateBps: 260,
+      plan: "interestOnly",
+    }),
+  }, null);
+  const realAccId = realAcc as unknown as number;
+  const principalRepays = [100000, 100000, 100000, 100000, 100000, 500000, 100000, 400000, 100000, 100000, 100000, 100000];
+  const expectedInterests = [4117, 6493, 6269, 5460, 5821, 5417, 4478, 4117, 3358, 3134, 2817, 2687];
+  for (let i = 0; i < 12; i++) {
+    const curBills = await db.select().from(installmentBills).where(eq(installmentBills.accountId, realAccId)).orderBy(installmentBills.periodNo);
+    const b = curBills[i];
+    check(`84期第${i + 1}期利息 = ${expectedInterests[i]} (实际 ${b.interestCents})`, b.interestCents === expectedInterests[i]);
+    await createRepayment({ personId: realPersonId, targetType: "bill", targetId: b.id, amountCents: b.interestCents + principalRepays[i] }, null);
+  }
+  const realAccAfter = (await db.select().from(debtAccounts).where(eq(debtAccounts.id, realAccId)))[0];
+  check(`84期总本金保持 3000000 (实际 ${realAccAfter.principalCents})`, realAccAfter.principalCents === 3000000);
+  check(`84期剩余本金 = 1100000 (实际 ${realAccAfter.remainingPrincipalCents})`, realAccAfter.remainingPrincipalCents === 1100000);
 
   console.log("\n== 11. 多客户数据隔离 ==");
   const { register, findUserByUsername } = await import("../src/server/services/auth-service");

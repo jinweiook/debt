@@ -48,3 +48,20 @@ export function addMonthsToDate(dateStr: string, n: number): string {
 export function monthOf(dateStr: string): string {
   return dateStr.slice(0, 7);
 }
+
+/** 两个日期 'YYYY-MM-DD' 相差天数：toDate - fromDate（UTC 计算，不受夏令时与本地时区影响） */
+export function diffDays(fromDate: string, toDate: string): number {
+  const [fy, fm, fd] = fromDate.split("-").map(Number);
+  const [ty, tm, td] = toDate.split("-").map(Number);
+  if (!fy || !fm || !fd || !ty || !tm || !td) return 0;
+  const fromUtc = Date.UTC(fy, fm - 1, fd);
+  const toUtc = Date.UTC(ty, tm - 1, td);
+  return Math.round((toUtc - fromUtc) / 86_400_000);
+}
+
+/** 计息周期天数：若前置日期有效且周期天数 > 0 则取实际天数，否则兜底按 30 天 */
+export function billingPeriodDays(prevDate: string | null | undefined, dueDate: string): number {
+  if (!prevDate) return 30;
+  const d = diffDays(prevDate, dueDate);
+  return d > 0 ? d : 30;
+}

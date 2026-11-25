@@ -6,7 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Field, Input, Select, Textarea } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
-import { yuanToCents, percentToBps, bpsToPercent, formatCents, cn } from "@/lib/utils";
+import { yuanToCents, percentToBps, formatCents, cn } from "@/lib/utils";
+import { generateDynamicSchedule, type DynamicPlan } from "@/lib/installment-calc";
+import { addMonthsToDate, billingPeriodDays, diffDays, today } from "@/server/lib/dates";
 import { createInstallmentDebtAction } from "@/server/actions/debt-actions";
 import type { Person } from "@/server/db/schema";
 
@@ -18,21 +20,12 @@ interface BillRow {
 }
 
 type InterestMode = "fixed" | "dynamic";
-type DynamicPlan = "equalPrincipal" | "interestOnly" | "equalPayment";
 
 const DYNAMIC_PLAN_OPTIONS: { value: DynamicPlan; label: string; desc: string }[] = [
   { value: "equalPrincipal", label: "等额本金", desc: "每月本金相等，利息随剩余本金逐月下降" },
   { value: "interestOnly", label: "先息后本", desc: "前 N-1 期只还利息，末期一次性还本金" },
   { value: "equalPayment", label: "等额本息", desc: "每月总额固定，利息递减本金递增" },
 ];
-
-function addMonthsToDate(dateStr: string, n: number): string {
-  const [y, m, d] = dateStr.split("-").map(Number);
-  const target = new Date(y, m - 1 + n, 1);
-  const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
-  const day = Math.min(d, lastDay);
-  return `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-}
 
 export function InstallmentForm({ persons }: { persons: Person[] }) {
   const router = useRouter();
@@ -55,9 +48,9 @@ export function InstallmentForm({ persons }: { persons: Person[] }) {
   const [loading, setLoading] = useState(false);
   // 客户端水合后再写入今天，避免 SSR/客户端跨午夜的字符串不一致
   useEffect(() => {
-    const today = new Date().toISOString().slice(0, 10);
-    setStartDate(today);
-    if (!firstDueDate) setFirstDueDate(today);
+    const t = today();
+    setStartDate(t);
+    if (!firstDueDate) setFirstDueDate(addMonthsToDate(t, 1));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const totalCents = useMemo(() => yuanToCents(totalYuan), [totalYuan]);
@@ -68,15 +61,6 @@ export function InstallmentForm({ persons }: { persons: Person[] }) {
     if (!Number.isInteger(term) || term < 1 || term > 360) return toast("期数应为 1-360 的整数", "error");
     if (!firstDueDate) return toast("请选择首期到期日", "error");
 
-    let annualRateBps: number | null = null;
-    if (interestMode === "dynamic") {
-      annualRateBps = percentToBps(annualRatePercent);
-      if (annualRateBps == null || annualRateBps <= 0) return toast("请输入正确的年化利率", "error");
-    }
-
-    // 客户端按服务端的同一份逻辑生成预览（仅做 UI 展示；服务端会再算一次以保证权威）
-    const monthRate = annualRateBps == null ? 0 : annualRateBps / 120000;
-    const planPrincipal: number[] = Array(term).fill(0);
     if (interestMode === "fixed") {
       const perInterest = yuanToCents(interestPerMonth) ?? 0;
       const base = Math.floor(totalCents / term);
@@ -91,45 +75,28 @@ export function InstallmentForm({ persons }: { persons: Person[] }) {
       );
       return;
     }
-    if (dynamicPlan === "equalPrincipal") {
-      const base = Math.floor(totalCents / term);
-      const remainder = totalCents - base * term;
-      for (let i = 0; i < term; i++) planPrincipal[i] = base + (i === term - 1 ? remainder : 0);
-    } else if (dynamicPlan === "interestOnly") {
-      for (let i = 0; i < term - 1; i++) planPrincipal[i] = 0;
-      planPrincipal[term - 1] = totalCents;
-    } else {
-      // equalPayment 客户端预览：用相同公式求 X
-      let x = 0;
-      if (monthRate === 0) {
-        x = totalCents / term;
-      } else {
-        const pow = Math.pow(1 + monthRate, term);
-        x = (totalCents * monthRate * pow) / (pow - 1);
-      }
-      let remaining = totalCents;
-      for (let i = 0; i < term - 1; i++) {
-        const interest = Math.round(remaining * monthRate);
-        const principal = Math.max(0, Math.round(x) - interest);
-        const actual = Math.min(principal, remaining);
-        planPrincipal[i] = actual;
-        remaining -= actual;
-      }
-      planPrincipal[term - 1] = Math.max(0, remaining);
-    }
-    let remainingAtStart = totalCents;
-    const rows: BillRow[] = [];
-    for (let i = 0; i < term; i++) {
-      const interest = Math.round(remainingAtStart * monthRate);
-      rows.push({
-        periodNo: i + 1,
-        dueDate: addMonthsToDate(firstDueDate, i),
-        principal: (planPrincipal[i] / 100).toFixed(2),
-        interest: (interest / 100).toFixed(2),
-      });
-      remainingAtStart -= planPrincipal[i];
-    }
-    setBills(rows);
+
+    const annualRateBps = percentToBps(annualRatePercent);
+    if (annualRateBps == null || annualRateBps <= 0) return toast("请输入正确的年化利率", "error");
+    if (!startDate) return toast("请选择放款日期", "error");
+    if (diffDays(startDate, firstDueDate) <= 0) return toast("首期到期日必须晚于放款日期", "error");
+
+    const schedule = generateDynamicSchedule({
+      principalCents: totalCents,
+      termMonths: term,
+      startDate,
+      firstDueDate,
+      annualRateBps,
+      plan: dynamicPlan,
+    });
+    setBills(
+      schedule.map((row) => ({
+        periodNo: row.periodNo,
+        dueDate: row.dueDate,
+        principal: (row.principalCents / 100).toFixed(2),
+        interest: (row.interestCents / 100).toFixed(2),
+      })),
+    );
   };
 
   const updateBill = (idx: number, patch: Partial<BillRow>) => {
@@ -224,7 +191,10 @@ export function InstallmentForm({ persons }: { persons: Person[] }) {
               <Input inputMode="decimal" value={interestPerMonth} onChange={(e) => setInterestPerMonth(e.target.value)} />
             </Field>
           ) : (
-            <Field label="年化利率（%）" hint={`按剩余本金计算 · 月利率 ${(Number(annualRatePercent) / 12).toFixed(4)}%`}>
+            <Field
+              label="年化利率（%）"
+              hint={`ACT/360 按日计息 · 日利率 ${((Number(annualRatePercent) || 0) / 360).toFixed(5)}%`}
+            >
               <Input inputMode="decimal" value={annualRatePercent} onChange={(e) => setAnnualRatePercent(e.target.value)} />
             </Field>
           )}
@@ -238,7 +208,7 @@ export function InstallmentForm({ persons }: { persons: Person[] }) {
           <div className="grid grid-cols-2 gap-2">
             {([
               { value: "fixed" as const, label: "固定利息", desc: "每期利息相同，生成后逐期可改" },
-              { value: "dynamic" as const, label: "年化动态", desc: "按剩余本金 × 年化 ÷ 12 · 还本金后下期利息下降" },
+              { value: "dynamic" as const, label: "年化动态", desc: "按剩余本金 × 年化 ÷ 360 × 实际天数 · 还本金后下期利息下降" },
             ]).map((opt) => (
               <button
                 type="button"
@@ -307,6 +277,7 @@ export function InstallmentForm({ persons }: { persons: Person[] }) {
                 <tr className="text-left text-xs text-text-dim border-b border-border">
                   <th className="py-2 pr-3 font-medium w-14">期号</th>
                   <th className="py-2 pr-3 font-medium">到期日</th>
+                  {interestMode === "dynamic" && <th className="py-2 pr-3 font-medium w-20">计息天数</th>}
                   <th className="py-2 pr-3 font-medium">本金（元）</th>
                   <th className="py-2 font-medium">利息（元）</th>
                 </tr>
@@ -318,6 +289,11 @@ export function InstallmentForm({ persons }: { persons: Person[] }) {
                     <td className="py-1.5 pr-3">
                       <Input type="date" value={b.dueDate} onChange={(e) => updateBill(i, { dueDate: e.target.value })} className="h-9" />
                     </td>
+                    {interestMode === "dynamic" && (
+                      <td className="py-1.5 pr-3 tnum text-xs text-text-dim">
+                        {billingPeriodDays(i === 0 ? startDate : bills[i - 1].dueDate, b.dueDate)}天
+                      </td>
+                    )}
                     <td className="py-1.5 pr-3">
                       <Input inputMode="decimal" value={b.principal} onChange={(e) => updateBill(i, { principal: e.target.value })} className="h-9" />
                     </td>

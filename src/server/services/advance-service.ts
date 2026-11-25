@@ -4,7 +4,7 @@ import { insertAndGetId } from "@/server/db/helpers";
 import { advances, debtAccounts, installmentBills, type OwnerId } from "@/server/db/schema";
 import { BusinessRuleError, NotFoundError } from "@/server/lib/errors";
 import { today } from "@/server/lib/dates";
-import { assertPersonAccess } from "./installment-service";
+import { assertPersonAccess, recomputeDynamicBills } from "./installment-service";
 
 /**
  * 垫付处理：某期分期未还时，本人先垫付 →
@@ -63,21 +63,25 @@ export async function markBillAdvanced(billId: number, ownerId: OwnerId, advance
       .set({ advanceId, updatedAt: new Date() })
       .where(eq(debtAccounts.id, generatedAccountId));
 
-    const allBills = await tx.select().from(installmentBills).where(eq(installmentBills.accountId, bill.accountId));
-    const allDone = allBills.every((b) => b.status === "paid" || b.status === "advanced");
-    const totalPaidPrincipal = allBills.reduce((s, b) => s + b.paidPrincipalCents, 0);
-    const totalAdvanced = allBills.reduce((s, b) => (b.advanced === 1 ? s + (b.principalCents - b.paidPrincipalCents) : s), 0);
-    await tx
-      .update(debtAccounts)
-      .set({
-        remainingPrincipalCents: Math.max(
-          allBills.reduce((s, b) => s + b.principalCents, 0) - totalPaidPrincipal - totalAdvanced,
-          0,
-        ),
-        status: allDone ? "settled" : "open",
-        updatedAt: new Date(),
-      })
-      .where(eq(debtAccounts.id, bill.accountId));
+    if (account.interestMode === "dynamic") {
+      await recomputeDynamicBills(tx as unknown as Db, bill.accountId);
+    } else {
+      const allBills = await tx.select().from(installmentBills).where(eq(installmentBills.accountId, bill.accountId));
+      const allDone = allBills.every((b) => b.status === "paid" || b.status === "advanced");
+      const totalPaidPrincipal = allBills.reduce((s, b) => s + b.paidPrincipalCents, 0);
+      const totalAdvanced = allBills.reduce((s, b) => (b.advanced === 1 ? s + (b.principalCents - b.paidPrincipalCents) : s), 0);
+      await tx
+        .update(debtAccounts)
+        .set({
+          remainingPrincipalCents: Math.max(
+            allBills.reduce((s, b) => s + b.principalCents, 0) - totalPaidPrincipal - totalAdvanced,
+            0,
+          ),
+          status: allDone ? "settled" : "open",
+          updatedAt: new Date(),
+        })
+        .where(eq(debtAccounts.id, bill.accountId));
+    }
 
     return { advanceId, generatedAccountId, amount };
   });

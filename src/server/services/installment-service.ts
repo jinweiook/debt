@@ -5,7 +5,12 @@ import { insertAndGetId } from "@/server/db/helpers";
 import { debtAccounts, installmentBills, type OwnerId } from "@/server/db/schema";
 import { BusinessRuleError, NotFoundError, ValidationError } from "@/server/lib/errors";
 import { addMonthsToDate } from "@/server/lib/dates";
-import { monthlyInterestCents } from "@/server/lib/money";
+import {
+  computeRecomputedDynamicBills,
+  DYNAMIC_PLANS,
+  generateDynamicSchedule,
+  type DynamicPlan,
+} from "@/lib/installment-calc";
 import { getPerson } from "./person-service";
 
 /** 校验 person 归属（ownerId=null 表示管理员不限制） */
@@ -22,9 +27,8 @@ export const billInputSchema = z.object({
 });
 export type BillInput = z.infer<typeof billInputSchema>;
 
-/** dynamic 模式下的还款方式 */
-export const DYNAMIC_PLANS = ["equalPrincipal", "interestOnly", "equalPayment"] as const;
-export type DynamicPlan = (typeof DYNAMIC_PLANS)[number];
+/** dynamic 模式下的还款方式（从共享纯函数模块重导出） */
+export { DYNAMIC_PLANS, type DynamicPlan };
 
 export const installmentInputSchema = z
   .object({
@@ -73,78 +77,35 @@ export function generateBills(params: {
 }
 
 /**
- * 动态利息模式生成账单：每期利息 = 月初剩余本金 × 年化 ÷ 12，
- * 本金按还款方式分配。本金未提前还的情况下，这是一份"计划表"；实际还款会触发重算。
- *
- * - equalPrincipal（等额本金）：每月本金 = total/N（余数归末期），利息逐月递减
- * - interestOnly（先息后本）：前 N-1 期本金 = 0，末期本金 = total，利息按剩余本金算（不变）
- * - equalPayment（等额本息）：每月总额 X = P·r·(1+r)^n / ((1+r)^n - 1)，按月分配
+ * 动态利息模式生成账单：ACT/360 按日计息，
+ * 第 1 期天数 = startDate → firstDueDate，后续各期天数 = 上期 dueDate → 本期 dueDate，
+ * 每期利息 = round(当期剩余本金 × 年化 ÷ 360 × 实际天数)。
  */
 export function generateDynamicBills(params: {
   principalCents: number;
   termMonths: number;
+  startDate?: string;
   firstDueDate: string;
   annualRateBps: number;
   plan: DynamicPlan;
 }): BillInput[] {
-  const { principalCents, termMonths, firstDueDate, annualRateBps, plan } = params;
+  const { principalCents, termMonths, startDate, firstDueDate, annualRateBps, plan } = params;
   if (termMonths < 1) throw new ValidationError("期数至少为 1");
   if (annualRateBps <= 0) throw new ValidationError("年化利率必须大于 0");
 
-  // 先按"无提前还本金"的假设，算出每期的月初剩余本金序列
-  const planPrincipal: number[] = Array(termMonths).fill(0);
-  if (plan === "equalPrincipal") {
-    const base = Math.floor(principalCents / termMonths);
-    const remainder = principalCents - base * termMonths;
-    for (let i = 0; i < termMonths; i++) {
-      planPrincipal[i] = base + (i === termMonths - 1 ? remainder : 0);
-    }
-  } else if (plan === "interestOnly") {
-    for (let i = 0; i < termMonths - 1; i++) planPrincipal[i] = 0;
-    planPrincipal[termMonths - 1] = principalCents;
-  } else {
-    // equalPayment：先求每月固定总额 X
-    // 公式：X = P * r * (1+r)^n / ((1+r)^n - 1)，其中 r = monthlyRate = annualRate/12
-    // 整数实现：迭代模拟，求出使最后一期还清剩余本金的 X
-    const r = annualRateBps / 120000; // 月利率（小数）
-    let x = 0;
-    if (r === 0) {
-      x = principalCents / termMonths;
-    } else {
-      // 初值用连续公式（浮点）作为合理起点
-      const pow = Math.pow(1 + r, termMonths);
-      x = (principalCents * r * pow) / (pow - 1);
-    }
-    // 模拟 n 期，每期：interest = remaining * r, principal_i = X - interest, remaining -= principal_i
-    let remaining = principalCents;
-    const used: number[] = [];
-    for (let i = 0; i < termMonths - 1; i++) {
-      const interest = Math.round(remaining * r);
-      const principal = Math.max(0, Math.round(x) - interest);
-      // 防止 principal 把 remaining 减成负数
-      const actualPrincipal = Math.min(principal, remaining);
-      used.push(actualPrincipal);
-      remaining -= actualPrincipal;
-    }
-    // 末期还清剩余
-    used.push(Math.max(0, remaining));
-    for (let i = 0; i < termMonths; i++) planPrincipal[i] = used[i];
-  }
-
-  // 计算每期：月初剩余本金 → 利息 → 输出
-  const result: BillInput[] = [];
-  let remainingAtStart = principalCents;
-  for (let i = 0; i < termMonths; i++) {
-    const interest = monthlyInterestCents(remainingAtStart, annualRateBps);
-    result.push({
-      periodNo: i + 1,
-      dueDate: addMonthsToDate(firstDueDate, i),
-      principalCents: planPrincipal[i],
-      interestCents: interest,
-    });
-    remainingAtStart -= planPrincipal[i];
-  }
-  return result;
+  return generateDynamicSchedule({
+    principalCents,
+    termMonths,
+    startDate,
+    firstDueDate,
+    annualRateBps,
+    plan,
+  }).map((row) => ({
+    periodNo: row.periodNo,
+    dueDate: row.dueDate,
+    principalCents: row.principalCents,
+    interestCents: row.interestCents,
+  }));
 }
 
 /** 创建分期账户 + 全部账单（单事务）。先校验 person 归属。 */
@@ -197,11 +158,8 @@ export async function createInstallmentDebt(input: InstallmentInput, ownerId: Ow
 }
 
 /**
- * 重算 dynamic 利息账户下所有未还账单的利息（interest + total），
- * 基于"计划本金 + 历史已还本金"推算每期月初剩余本金。
- * 必须在事务内调用，传入 tx。
- *
- * 入口场景：还款后，剩余本金减少，后续账单的利息会下降，需要重算
+ * 重算 dynamic 利息账户下所有未还账单的利息（ACT/360）及计划本金，
+ * 并同步账户剩余本金与结清状态。必须在事务内调用，传入 tx。
  */
 export async function recomputeDynamicBills(tx: Db, accountId: number): Promise<void> {
   const [account] = await tx
@@ -212,77 +170,40 @@ export async function recomputeDynamicBills(tx: Db, accountId: number): Promise<
   if (!account || account.interestMode !== "dynamic" || !account.annualRateBps) return;
 
   const plan: DynamicPlan = (account.dynamicPlan as DynamicPlan | null) ?? "equalPrincipal";
-  const rate = account.annualRateBps;
-  const totalPrincipal = account.principalCents;
-
   const bills = await tx
     .select()
     .from(installmentBills)
     .where(eq(installmentBills.accountId, accountId))
     .orderBy(asc(installmentBills.periodNo));
 
-  // 1) 先按当前各期 planPrincipal 重算（防止用户手动改过 planned 本金）
-  // 2) 累加 paid_principal 倒推"每期月初剩余本金" → 利息
-  let remainingAtStart = totalPrincipal;
-  let cumulativePaidPrincipal = 0;
-  for (let i = 0; i < bills.length; i++) {
-    const b = bills[i];
-    // 已还清的账单（含 advanced 垫付的）不再重算，避免与 paidCents 不变量冲突
-    if (b.status === "paid" || b.status === "advanced") {
-      cumulativePaidPrincipal += b.paidPrincipalCents;
-      remainingAtStart = Math.max(0, totalPrincipal - cumulativePaidPrincipal);
-      continue;
-    }
-    // 当前期"月初剩余本金" = 总本金 - 之前所有已还本金
-    const remainingThisMonth = Math.max(0, totalPrincipal - cumulativePaidPrincipal);
-    // 计划本金：
-    //   等额本金 → total/N；先息后本 → 0/末期吸收剩余；等额本息 → 保留原 planPrincipal
-    let plannedThis: number;
-    if (plan === "equalPrincipal") {
-      plannedThis = computeEqualPrincipal(totalPrincipal, b.periodNo, bills.length);
-    } else if (plan === "interestOnly") {
-      plannedThis = b.periodNo === bills.length
-        ? Math.max(0, totalPrincipal - cumulativePaidPrincipal) // 末期吸收全部剩余本金
-        : 0;
-    } else {
-      plannedThis = b.principalCents; // 等额本息：保留当前计划本金
-    }
-    const interest = monthlyInterestCents(remainingThisMonth, rate);
-    const newTotal = plannedThis + interest;
+  const res = computeRecomputedDynamicBills({
+    totalPrincipal: account.principalCents,
+    annualRateBps: account.annualRateBps,
+    plan,
+    startDate: account.startDate,
+    bills,
+  });
 
+  for (const u of res.updates) {
     await tx
       .update(installmentBills)
       .set({
-        principalCents: plannedThis,
-        interestCents: interest,
-        totalCents: newTotal,
+        principalCents: u.principalCents,
+        interestCents: u.interestCents,
+        totalCents: u.totalCents,
+        status: u.status,
       })
-      .where(eq(installmentBills.id, b.id));
-
-    // 推进累计已还：本月实际已还的部分（包含多还）
-    cumulativePaidPrincipal += b.paidPrincipalCents;
-    remainingAtStart = Math.max(0, totalPrincipal - cumulativePaidPrincipal);
+      .where(eq(installmentBills.id, u.id));
   }
 
-  // 同步账户冗余 remaining_principal_cents
-  const allBills = await tx
-    .select()
-    .from(installmentBills)
-    .where(eq(installmentBills.accountId, accountId));
-  const paidPrincipalTotal = allBills.reduce((s, b) => s + b.paidPrincipalCents, 0);
   await tx
     .update(debtAccounts)
     .set({
-      remainingPrincipalCents: Math.max(0, totalPrincipal - paidPrincipalTotal),
+      remainingPrincipalCents: res.remainingPrincipalCents,
+      status: res.accountStatus,
       updatedAt: new Date(),
     })
     .where(eq(debtAccounts.id, accountId));
-}
-
-function computeEqualPrincipal(total: number, periodNo: number, term: number): number {
-  const base = Math.floor(total / term);
-  const remainder = total - base * term;
-  return periodNo === term ? base + remainder : base;
 }
 
 /** 逐期编辑（仅未还、未垫付账单可改）。校验账单 → 账户 → 欠款人归属链。 */
@@ -316,15 +237,19 @@ export async function updateBill(
       })
       .where(eq(installmentBills.id, billId));
 
-    // 同步账户冗余本金
+    // 同步账户冗余本金（以账户原总本金 + 当期本金差额为准，避免先息后本提前还本后双重扣减）
     const all = await tx.select().from(installmentBills).where(eq(installmentBills.accountId, bill.accountId));
-    const totalPrincipal = all.reduce((s, b) => s + (b.id === billId ? principal : b.principalCents), 0);
-    const paidPrincipal = all.reduce((s, b) => s + b.paidPrincipalCents, 0);
+    const principalDelta = principal - bill.principalCents;
+    const totalPrincipal = Math.max(0, account.principalCents + principalDelta);
+    const settledPrincipal = all.reduce((s, b) => {
+      const p = b.id === billId ? principal : b.principalCents;
+      return s + (b.advanced === 1 ? Math.max(p, b.paidPrincipalCents) : b.paidPrincipalCents);
+    }, 0);
     await tx
       .update(debtAccounts)
       .set({
         principalCents: totalPrincipal,
-        remainingPrincipalCents: totalPrincipal - paidPrincipal,
+        remainingPrincipalCents: Math.max(0, totalPrincipal - settledPrincipal),
         termMonths: all.length,
         updatedAt: new Date(),
       })
@@ -345,6 +270,7 @@ export async function updateInstallmentAccount(
     await assertPersonAccess(account.personId, ownerId);
 
     const changingRate = patch.annualRateBps !== undefined && patch.annualRateBps !== account.annualRateBps;
+    const changingStartDate = patch.startDate !== undefined && patch.startDate !== account.startDate;
     if (changingRate) {
       if (account.interestMode !== "dynamic") {
         throw new BusinessRuleError("仅动态利息模式的分期可以修改年化利率");
@@ -377,7 +303,7 @@ export async function updateInstallmentAccount(
       })
       .where(eq(debtAccounts.id, accountId));
 
-    if (changingRate) {
+    if (account.interestMode === "dynamic" && (changingRate || changingStartDate)) {
       await recomputeDynamicBills(tx as unknown as Db, accountId);
     }
   });

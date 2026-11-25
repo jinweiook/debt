@@ -36,9 +36,7 @@ export default async function LoanDetailPage({ params }: { params: Promise<{ id:
   const isInstallment = account.type === "installment";
 
   // 统计
-  const totalPrincipal = isInstallment
-    ? bills!.reduce((s, b) => s + b.principalCents, 0)
-    : account.principalCents;
+  const totalPrincipal = account.principalCents;
   const totalPaid = isInstallment
     ? bills!.reduce((s, b) => s + b.paidCents, 0)
     : account.paidInterestCents + (account.principalCents - account.remainingPrincipalCents);

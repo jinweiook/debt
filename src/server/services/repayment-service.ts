@@ -155,23 +155,8 @@ export async function createRepayment(input: RepaymentInput, ownerId: OwnerId) {
       if (a.interestType === "annual") await accrueAccountInterest(a.id, tx as unknown as Db);
     }
 
-    // 1.5 dynamic 利息账户：先重算所有账单（利息按当前剩余本金动态更新）
-    const dynamicAccounts = await tx
-      .select()
-      .from(debtAccounts)
-      .where(
-        and(
-          eq(debtAccounts.personId, parsed.personId),
-          eq(debtAccounts.type, "installment"),
-          eq(debtAccounts.interestMode, "dynamic"),
-          eq(debtAccounts.status, "open"),
-        ),
-      );
-    for (const a of dynamicAccounts) {
-      await recomputeDynamicBills(tx as unknown as Db, a.id);
-    }
-
-    // 2. 权威重算分配
+    // 2. 权威重算分配（直接按当前各期账单的应还本息分配，保留手工调整过的当期利息；
+    //    分配落库后再由下方步骤 4 触发后续未还账单动态重算）
     const targets = await buildOrderedTargets(parsed.personId, { targetType: parsed.targetType, targetId: parsed.targetId }, tx as unknown as Db);
     const allocation = allocateRepayment(targets, parsed.amountCents);
     if (allocation.remainder > 0) {

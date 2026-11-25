@@ -53,3 +53,15 @@ export function monthlyInterestCents(principalCents: number, annualRateBps: numb
   if (principalCents <= 0 || annualRateBps <= 0) return 0;
   return Math.round((principalCents * annualRateBps) / 120000);
 }
+
+/**
+ * 按日计息（ACT/360，整数 half-up 舍入）：
+ * 当期利息(分) = round(剩余本金(分) × 年化bps / 10000 × 计息天数 / 360)
+ * 使用 BigInt 避免大额本金 × 天数乘积溢出与浮点精度漂移。
+ */
+export function dailyInterestCents(principalCents: number, annualRateBps: number, days: number): number {
+  if (principalCents <= 0 || annualRateBps <= 0 || days <= 0) return 0;
+  const num = BigInt(principalCents) * BigInt(annualRateBps) * BigInt(days);
+  const den = 3_600_000n;
+  return Number((num * 2n + den) / (2n * den));
+}
