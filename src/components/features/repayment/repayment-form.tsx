@@ -19,12 +19,19 @@ import type { Person } from "@/server/db/schema";
 
 const steps = ["选择欠款人", "选择归还对象", "金额与确认"];
 
-export function RepaymentForm({ persons }: { persons: Person[] }) {
+export function RepaymentForm({
+  persons,
+  ownerLabels,
+}: {
+  persons: Person[];
+  ownerLabels?: Record<string, string>;
+}) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { toast } = useToast();
 
   const [step, setStep] = useState(0);
+  const [ownerFilter, setOwnerFilter] = useState("");
   const [personId, setPersonId] = useState(searchParams.get("personId") ?? "");
   const [targets, setTargets] = useState<SplitTarget[]>([]);
   const [targetsLoading, setTargetsLoading] = useState(false);
@@ -136,30 +143,54 @@ export function RepaymentForm({ persons }: { persons: Person[] }) {
 
       {step === 0 && (
         <Card className="space-y-4">
-          <div>
-            <CardTitle>这次是谁还的钱？</CardTitle>
-            <CardDescription>选择欠款人后进入下一步</CardDescription>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <CardTitle>这次是谁还的钱？</CardTitle>
+              <CardDescription>选择欠款人后进入下一步</CardDescription>
+            </div>
+            {ownerLabels && (
+              <Select
+                value={ownerFilter}
+                onChange={(e) => setOwnerFilter(e.target.value)}
+                className="h-9 w-auto min-w-44 text-xs"
+                aria-label="按归属客户筛选"
+              >
+                <option value="">全部客户</option>
+                {[...new Set(persons.map((p) => p.ownerUserId))].map((uid) => (
+                  <option key={uid} value={uid}>
+                    {ownerLabels[uid] ?? uid}
+                  </option>
+                ))}
+              </Select>
+            )}
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-            {persons.map((p) => (
-              <button
-                key={p.id}
-                onClick={() => {
-                  setPersonId(String(p.id));
-                  setAllocation(null);
-                  setStep(1);
-                }}
-                className={cn(
-                  "glass card-hover p-4 text-left",
-                  personId === String(p.id) && "border-accent/50",
-                )}
-              >
-                <span className="h-9 w-9 rounded-full gradient-card border border-accent-2/30 flex items-center justify-center font-bold text-accent-2">
-                  {p.name.slice(0, 1)}
-                </span>
-                <p className="mt-2 font-medium truncate">{p.name}</p>
-              </button>
-            ))}
+            {persons
+              .filter((p) => !ownerFilter || p.ownerUserId === ownerFilter)
+              .map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => {
+                    setPersonId(String(p.id));
+                    setAllocation(null);
+                    setStep(1);
+                  }}
+                  className={cn(
+                    "glass card-hover p-4 text-left",
+                    personId === String(p.id) && "border-accent/50",
+                  )}
+                >
+                  <span className="h-9 w-9 rounded-full gradient-card border border-accent-2/30 flex items-center justify-center font-bold text-accent-2">
+                    {p.name.slice(0, 1)}
+                  </span>
+                  <p className="mt-2 font-medium truncate">{p.name}</p>
+                  {ownerLabels && (
+                    <p className="mt-0.5 text-[11px] text-text-dim truncate">
+                      客户：{ownerLabels[p.ownerUserId] ?? p.ownerUserId}
+                    </p>
+                  )}
+                </button>
+              ))}
           </div>
           {persons.length === 0 && <p className="text-sm text-text-dim">请先在首页添加欠款人</p>}
         </Card>

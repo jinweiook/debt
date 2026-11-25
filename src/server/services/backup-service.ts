@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, ne } from "drizzle-orm";
 import { getDb } from "@/server/db/client";
 import { advances, debtAccounts, installmentBills, persons, repayments, users, type OwnerId } from "@/server/db/schema";
 import { ValidationError } from "@/server/lib/errors";
@@ -19,7 +19,7 @@ const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 const personRow = z.object({
   id: z.number().int().positive(),
-  // 兼容旧版快照：缺省时导入到当前登录客户名下
+  // 兼容旧版快照：缺省时导入到当前登录客户名下；普通客户导入时强制覆盖
   ownerUserId: z.string().uuid().optional(),
   name: z.string().max(64),
   note: z.string().max(512).nullable(),
@@ -39,6 +39,8 @@ const accountRow = z.object({
   interestType: z.enum(["none", "fixed", "annual"]),
   fixedInterestCents: cents.nullable(),
   annualRateBps: z.number().int().min(0).nullable(),
+  interestMode: z.enum(["fixed", "dynamic"]).optional().default("fixed"),
+  dynamicPlan: z.enum(["equalPrincipal", "interestOnly", "equalPayment"]).nullable().optional().default(null),
   accruedInterestCents: cents,
   paidInterestCents: cents,
   lastAccrualMonth: z.string().regex(/^\d{4}-\d{2}$/).nullable(),
@@ -109,8 +111,8 @@ export type Snapshot = z.infer<typeof snapshotSchema>;
 
 /**
  * 导出快照。按客户隔离：
- * - 普通客户：只导出自己名下的全部数据
- * - 管理员（ownerId=null）：导出整库
+ * - 普通客户（ownerId != null）：只导出自己名下的全部数据
+ * - 全局视野（ownerId == null）：导出整库
  */
 export async function exportSnapshot(ownerId: OwnerId): Promise<Snapshot> {
   const db = getDb();
@@ -152,34 +154,74 @@ function buildSnapshot(
     version: SNAPSHOT_VERSION,
     exportedAt: new Date().toISOString(),
     persons: p.map((x) => ({
-      id: x.id, ownerUserId: x.ownerUserId, name: x.name, note: x.note, contact: x.contact,
-      defaultRepayDay: x.defaultRepayDay, status: x.status as "active" | "archived",
+      id: x.id,
+      ownerUserId: x.ownerUserId,
+      name: x.name,
+      note: x.note,
+      contact: x.contact,
+      defaultRepayDay: x.defaultRepayDay,
+      status: x.status as "active" | "archived",
     })),
     debtAccounts: a.map((x) => ({
-      id: x.id, personId: x.personId, type: x.type as "installment" | "personal", title: x.title,
-      source: x.source, principalCents: x.principalCents, remainingPrincipalCents: x.remainingPrincipalCents,
-      interestType: x.interestType as "none" | "fixed" | "annual", fixedInterestCents: x.fixedInterestCents,
-      annualRateBps: x.annualRateBps, accruedInterestCents: x.accruedInterestCents, paidInterestCents: x.paidInterestCents,
-      lastAccrualMonth: x.lastAccrualMonth, startDate: x.startDate, termMonths: x.termMonths,
-      status: x.status as "open" | "settled" | "closed", origin: x.origin as "manual" | "advance",
-      advanceId: x.advanceId, note: x.note,
+      id: x.id,
+      personId: x.personId,
+      type: x.type as "installment" | "personal",
+      title: x.title,
+      source: x.source,
+      principalCents: x.principalCents,
+      remainingPrincipalCents: x.remainingPrincipalCents,
+      interestType: x.interestType as "none" | "fixed" | "annual",
+      fixedInterestCents: x.fixedInterestCents,
+      annualRateBps: x.annualRateBps,
+      interestMode: (x.interestMode as "fixed" | "dynamic") ?? "fixed",
+      dynamicPlan: (x.dynamicPlan as "equalPrincipal" | "interestOnly" | "equalPayment" | null) ?? null,
+      accruedInterestCents: x.accruedInterestCents,
+      paidInterestCents: x.paidInterestCents,
+      lastAccrualMonth: x.lastAccrualMonth,
+      startDate: x.startDate,
+      termMonths: x.termMonths,
+      status: x.status as "open" | "settled" | "closed",
+      origin: x.origin as "manual" | "advance",
+      advanceId: x.advanceId,
+      note: x.note,
     })),
     installmentBills: b.map((x) => ({
-      id: x.id, accountId: x.accountId, periodNo: x.periodNo, dueDate: x.dueDate,
-      principalCents: x.principalCents, interestCents: x.interestCents, totalCents: x.totalCents,
-      paidCents: x.paidCents, paidInterestCents: x.paidInterestCents, paidPrincipalCents: x.paidPrincipalCents,
-      advanced: x.advanced as 0 | 1, advanceId: x.advanceId,
-      status: x.status as "pending" | "partial" | "paid" | "advanced", note: x.note,
+      id: x.id,
+      accountId: x.accountId,
+      periodNo: x.periodNo,
+      dueDate: x.dueDate,
+      principalCents: x.principalCents,
+      interestCents: x.interestCents,
+      totalCents: x.totalCents,
+      paidCents: x.paidCents,
+      paidInterestCents: x.paidInterestCents,
+      paidPrincipalCents: x.paidPrincipalCents,
+      advanced: x.advanced as 0 | 1,
+      advanceId: x.advanceId,
+      status: x.status as "pending" | "partial" | "paid" | "advanced",
+      note: x.note,
     })),
     repayments: r.map((x) => ({
-      id: x.id, personId: x.personId, targetType: x.targetType as "bill" | "personal",
-      billId: x.billId, accountId: x.accountId, amountCents: x.amountCents,
-      interestPartCents: x.interestPartCents, principalPartCents: x.principalPartCents,
-      batchId: x.batchId, repaidAt: x.repaidAt, note: x.note,
+      id: x.id,
+      personId: x.personId,
+      targetType: x.targetType as "bill" | "personal",
+      billId: x.billId,
+      accountId: x.accountId,
+      amountCents: x.amountCents,
+      interestPartCents: x.interestPartCents,
+      principalPartCents: x.principalPartCents,
+      batchId: x.batchId,
+      repaidAt: x.repaidAt,
+      note: x.note,
     })),
     advances: ad.map((x) => ({
-      id: x.id, personId: x.personId, billId: x.billId, amountCents: x.amountCents,
-      advanceDate: x.advanceDate, generatedAccountId: x.generatedAccountId, note: x.note,
+      id: x.id,
+      personId: x.personId,
+      billId: x.billId,
+      amountCents: x.amountCents,
+      advanceDate: x.advanceDate,
+      generatedAccountId: x.generatedAccountId,
+      note: x.note,
     })),
   };
 }
@@ -211,9 +253,9 @@ export function validateSnapshot(raw: unknown): Snapshot {
 
 /**
  * 导入快照。按客户隔离：
- * - 管理员（ownerId=null）：整库替换（沿用旧行为）
- * - 普通客户：仅替换自己名下数据，快照中所有欠款人强制归属到当前客户；
- *   快照 id 与其他客户的数据冲突时拒绝导入（整体回滚，不会污染他人数据）
+ * - 全局视野（ownerId=null）：整库替换（沿用管理员行为）
+ * - 普通客户（ownerId!=null）：仅替换自己名下数据，强制覆盖所有欠款人归属为当前客户，
+ *   并校验快照 ID 不与其他客户已占用的记录冲突（允许恢复自己曾删除的历史 ID）。
  */
 export async function importSnapshot(snapshot: Snapshot, ownerId: OwnerId): Promise<void> {
   const db = getDb();
@@ -222,38 +264,58 @@ export async function importSnapshot(snapshot: Snapshot, ownerId: OwnerId): Prom
     const adminId = await firstAdminId();
     await db.transaction(async (tx) => {
       await deleteAllBusinessData(tx);
-      await insertSnapshotData(tx, snapshot, adminId);
+      await insertSnapshotData(tx, snapshot, adminId, false);
     });
     await invalidateAllCache();
     return;
   }
 
-  // 当前客户已有数据 id
+  // 查询「其他客户」当前占用的所有业务表 ID（防止主键冲突或跨租户覆盖）
+  const otherPersons = await db
+    .select({ id: persons.id })
+    .from(persons)
+    .where(ne(persons.ownerUserId, ownerId));
+  const otherPersonIds = otherPersons.map((r) => r.id);
+
+  if (otherPersonIds.length > 0) {
+    const [otherAccounts, otherRepayments, otherAdvances] = await Promise.all([
+      db.select({ id: debtAccounts.id }).from(debtAccounts).where(inArray(debtAccounts.personId, otherPersonIds)),
+      db.select({ id: repayments.id }).from(repayments).where(inArray(repayments.personId, otherPersonIds)),
+      db.select({ id: advances.id }).from(advances).where(inArray(advances.personId, otherPersonIds)),
+    ]);
+    const otherAccountIds = otherAccounts.map((r) => r.id);
+    const otherBills = otherAccountIds.length
+      ? await db
+          .select({ id: installmentBills.id })
+          .from(installmentBills)
+          .where(inArray(installmentBills.accountId, otherAccountIds))
+      : [];
+
+    const guard = (label: string, snapshotIds: number[], occupiedIds: number[]) => {
+      if (occupiedIds.length === 0 || snapshotIds.length === 0) return;
+      const occupied = new Set(occupiedIds);
+      const clash = snapshotIds.filter((id) => occupied.has(id));
+      if (clash.length > 0) {
+        throw new ValidationError(`备份与其他客户的数据 ID 冲突（${label}: ${clash.slice(0, 5).join(", ")}），无法导入`);
+      }
+    };
+
+    guard("欠款人", snapshot.persons.map((p) => p.id), otherPersonIds);
+    guard("账户", snapshot.debtAccounts.map((a) => a.id), otherAccountIds);
+    guard("账单", snapshot.installmentBills.map((b) => b.id), otherBills.map((b) => b.id));
+    guard("还款流水", snapshot.repayments.map((r) => r.id), otherRepayments.map((r) => r.id));
+    guard("垫付记录", snapshot.advances.map((a) => a.id), otherAdvances.map((a) => a.id));
+  }
+
+  // 查出当前客户名下旧数据以便事务内精准清理
   const ownPersons = await db.select({ id: persons.id }).from(persons).where(eq(persons.ownerUserId, ownerId));
   const ownPersonIds = ownPersons.map((r) => r.id);
   const ownAccounts = ownPersonIds.length
     ? await db.select({ id: debtAccounts.id }).from(debtAccounts).where(inArray(debtAccounts.personId, ownPersonIds))
     : [];
   const ownAccountIds = ownAccounts.map((r) => r.id);
-  const ownBills = ownAccountIds.length
-    ? await db.select({ id: installmentBills.id }).from(installmentBills).where(inArray(installmentBills.accountId, ownAccountIds))
-    : [];
-  const ownBillIds = ownBills.map((r) => r.id);
-
-  // 冲突检测：快照 id 不得与其他客户的现存数据冲突（防止 id 串户）
-  const guard = (label: string, snapshotIds: number[], ownIds: number[]) => {
-    const own = new Set(ownIds);
-    const clash = snapshotIds.filter((id) => !own.has(id));
-    if (clash.length > 0) {
-      throw new ValidationError(`备份与其他客户的数据 ID 冲突（${label}: ${clash.slice(0, 5).join(", ")}），无法导入`);
-    }
-  };
-  guard("欠款人", snapshot.persons.map((p) => p.id), ownPersonIds);
-  guard("账户", snapshot.debtAccounts.map((a) => a.id), ownAccountIds);
-  guard("账单", snapshot.installmentBills.map((b) => b.id), ownBillIds);
 
   await db.transaction(async (tx) => {
-    // 依赖逆序删除：只删自己名下数据
     if (ownPersonIds.length > 0) {
       await tx.delete(advances).where(inArray(advances.personId, ownPersonIds));
       await tx.delete(repayments).where(inArray(repayments.personId, ownPersonIds));
@@ -265,17 +327,23 @@ export async function importSnapshot(snapshot: Snapshot, ownerId: OwnerId): Prom
       await tx.delete(debtAccounts).where(inArray(debtAccounts.personId, ownPersonIds));
       await tx.delete(persons).where(inArray(persons.id, ownPersonIds));
     }
-    await insertSnapshotData(tx, snapshot, ownerId);
+    // 普通客户导入强制归属到自身，禁止伪造他人 ownerUserId
+    await insertSnapshotData(tx, snapshot, ownerId, true);
   });
   await invalidateAllCache();
 }
 
-/** 插入快照数据；快照未携带归属时回退到 fallbackOwnerId（调用方保证非空） */
-async function insertSnapshotData(tx: Tx, snapshot: Snapshot, fallbackOwnerId: string): Promise<void> {
+/** 插入快照数据；forceOwner=true 时强制覆盖 ownerUserId，避免普通客户导入串户 */
+async function insertSnapshotData(
+  tx: Tx,
+  snapshot: Snapshot,
+  fallbackOwnerId: string,
+  forceOwner: boolean,
+): Promise<void> {
   const owner: string = fallbackOwnerId;
   if (snapshot.persons.length > 0) {
     await tx.insert(persons).values(
-      snapshot.persons.map((p) => ({ ...p, ownerUserId: p.ownerUserId ?? owner })),
+      snapshot.persons.map((p) => ({ ...p, ownerUserId: forceOwner ? owner : (p.ownerUserId ?? owner) })),
     );
   }
   if (snapshot.debtAccounts.length > 0) {
@@ -296,11 +364,10 @@ async function firstAdminId(): Promise<string> {
   const db = getDb();
   const [admin] = await db.select({ id: users.id }).from(users).where(eq(users.role, "admin")).limit(1);
   if (!admin) throw new ValidationError("系统中不存在管理员账号，无法确定数据归属");
-  // admin 一定存在（上面已校验），TS 推断为 OwnerId = string | null 故手动收窄
   return admin.id as string;
 }
 
-/** 危险操作：清空全部数据（仅管理员调用，调用方负责鉴权） */
+/** 危险操作：清空全部数据（调用方负责鉴权） */
 export async function clearAllData(): Promise<void> {
   const db = getDb();
   await db.transaction(async (tx) => {

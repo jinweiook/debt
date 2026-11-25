@@ -8,6 +8,13 @@
       "when": 1795509613353,
       "tag": "0000_fixed_tempest",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1795579642694,
+      "tag": "0001_bored_saracen",
+      "breakpoints": true
     }
   ]
 }

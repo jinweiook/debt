@@ -8,6 +8,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { MoneyText } from "@/components/ui/money-text";
 import { useToast } from "@/components/ui/toast";
+import { usePermission } from "@/components/layout/session";
 import { deleteRepaymentsAction } from "@/server/actions/repayment-actions";
 import { formatCents } from "@/lib/utils";
 
@@ -25,6 +26,7 @@ export interface RepaymentRow {
 export function RepaymentTable({ rows, personId }: { rows: RepaymentRow[]; personId: number }) {
   const router = useRouter();
   const { toast } = useToast();
+  const canDelete = usePermission("repayment:delete");
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [confirmIds, setConfirmIds] = useState<number[] | null>(null);
 
@@ -57,7 +59,7 @@ export function RepaymentTable({ rows, personId }: { rows: RepaymentRow[]; perso
 
   return (
     <div>
-      {selected.size > 0 && (
+      {canDelete && selected.size > 0 && (
         <div className="mb-3 flex items-center justify-between rounded-[var(--radius-sm)] bg-surface-2/70 px-3 py-2">
           <span className="text-sm text-text-dim">已选 {selected.size} 笔</span>
           <div className="flex gap-2">
@@ -70,28 +72,32 @@ export function RepaymentTable({ rows, personId }: { rows: RepaymentRow[]; perso
         <table className="w-full min-w-[640px] text-sm">
           <thead>
             <tr className="text-left text-xs text-text-dim border-b border-border">
-              <th className="py-2.5 pr-3 font-medium w-8">
-                <Checkbox checked={allChecked} onChange={toggleAll} ariaLabel="全选" />
-              </th>
+              {canDelete && (
+                <th className="py-2.5 pr-3 font-medium w-8">
+                  <Checkbox checked={allChecked} onChange={toggleAll} ariaLabel="全选" />
+                </th>
+              )}
               <th className="py-2.5 pr-3 font-medium">日期</th>
               <th className="py-2.5 pr-3 font-medium">归还对象</th>
               <th className="py-2.5 pr-3 font-medium text-right">金额</th>
               <th className="py-2.5 pr-3 font-medium text-right">其中利息</th>
               <th className="py-2.5 pr-3 font-medium text-right">其中本金</th>
               <th className="py-2.5 pr-3 font-medium">备注</th>
-              <th className="py-2.5 font-medium text-right">操作</th>
+              {canDelete && <th className="py-2.5 font-medium text-right">操作</th>}
             </tr>
           </thead>
           <tbody>
             {[...rows].reverse().map((r) => (
               <tr key={r.id} className="border-b border-border/50 transition-fast hover:bg-white/[0.03]">
-                <td className="py-3 pr-3">
-                  <Checkbox
-                    checked={selected.has(r.id)}
-                    onChange={(c) => toggle(r.id, c)}
-                    ariaLabel={`选择还款 ${r.id}`}
-                  />
-                </td>
+                {canDelete && (
+                  <td className="py-3 pr-3">
+                    <Checkbox
+                      checked={selected.has(r.id)}
+                      onChange={(c) => toggle(r.id, c)}
+                      ariaLabel={`选择还款 ${r.id}`}
+                    />
+                  </td>
+                )}
                 <td className="py-3 pr-3 tnum text-text-dim">{r.repaidAt}</td>
                 <td className="py-3 pr-3">
                   {r.targetLabel}
@@ -101,9 +107,11 @@ export function RepaymentTable({ rows, personId }: { rows: RepaymentRow[]; perso
                 <td className="py-3 pr-3 text-right tnum text-text-dim">{formatCents(r.interestPartCents)}</td>
                 <td className="py-3 pr-3 text-right tnum text-text-dim">{formatCents(r.principalPartCents)}</td>
                 <td className="py-3 pr-3 text-text-dim text-xs">{r.note}</td>
-                <td className="py-3 text-right">
-                  <Button variant="ghost" size="sm" onClick={() => setConfirmIds([r.id])}>删除</Button>
-                </td>
+                {canDelete && (
+                  <td className="py-3 text-right">
+                    <Button variant="ghost" size="sm" onClick={() => setConfirmIds([r.id])}>删除</Button>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>

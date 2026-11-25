@@ -142,6 +142,9 @@ export const users = mysqlTable(
   {
     id: varchar("id", { length: 36 }).primaryKey(),
     username: varchar("username", { length: 64 }).notNull(),
+    displayName: varchar("display_name", { length: 64 }),
+    phone: varchar("phone", { length: 32 }),
+    note: varchar("note", { length: 512 }),
     passwordHash: varchar("password_hash", { length: 255 }).notNull(),
     role: varchar("role", { length: 16 }).notNull().default("user"),
     status: varchar("status", { length: 16 }).notNull().default("active"),
@@ -153,6 +156,47 @@ export const users = mysqlTable(
   (t) => [
     uniqueIndex("uk_users_username").on(t.username),
     index("idx_users_status").on(t.status),
+  ],
+);
+
+export const roles = mysqlTable(
+  "roles",
+  {
+    id: bigint("id", { mode: "number" }).autoincrement().primaryKey(),
+    code: varchar("code", { length: 32 }).notNull(),
+    name: varchar("name", { length: 64 }).notNull(),
+    description: varchar("description", { length: 255 }),
+    dataScope: varchar("data_scope", { length: 16 }).notNull().default("self"),
+    isSystem: smallint("is_system").notNull().default(0),
+    createdAt: datetime("created_at", { mode: "date", fsp: 3 }).notNull().default(sql`CURRENT_TIMESTAMP(3)`),
+    updatedAt: datetime("updated_at", { mode: "date", fsp: 3 }).notNull().default(sql`CURRENT_TIMESTAMP(3)`),
+  },
+  (t) => [uniqueIndex("uk_roles_code").on(t.code)],
+);
+
+export const rolePermissions = mysqlTable(
+  "role_permissions",
+  {
+    id: bigint("id", { mode: "number" }).autoincrement().primaryKey(),
+    roleId: bigint("role_id", { mode: "number" }).notNull(),
+    permissionCode: varchar("permission_code", { length: 64 }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("uk_role_perm").on(t.roleId, t.permissionCode),
+    index("idx_role_perm_role").on(t.roleId),
+  ],
+);
+
+export const userRoles = mysqlTable(
+  "user_roles",
+  {
+    id: bigint("id", { mode: "number" }).autoincrement().primaryKey(),
+    userId: varchar("user_id", { length: 36 }).notNull(),
+    roleId: bigint("role_id", { mode: "number" }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("uk_user_role").on(t.userId, t.roleId),
+    index("idx_user_role_user").on(t.userId),
   ],
 );
 

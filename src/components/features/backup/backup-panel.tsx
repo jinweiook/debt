@@ -7,7 +7,7 @@ import { Card, CardTitle, CardDescription } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
-import { useSession } from "@/components/layout/session";
+import { usePermission, useSession } from "@/components/layout/session";
 import { validateBackupAction, clearAllDataAction } from "@/server/actions/backup-actions";
 
 interface Preview {
@@ -23,6 +23,12 @@ export function BackupPanel() {
   const { toast } = useToast();
   const router = useRouter();
   const session = useSession();
+  const canExport = usePermission("backup:export");
+  const canImport = usePermission("backup:import");
+  const canExportSql = usePermission("backup:export_sql");
+  const canClearAll = usePermission("backup:clear_all");
+  const isAllScope = session?.dataScope === "all";
+
   const fileRef = useRef<HTMLInputElement>(null);
   const [rawJson, setRawJson] = useState<unknown>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -87,19 +93,23 @@ export function BackupPanel() {
 
   return (
     <div className="max-w-2xl space-y-4">
-      <Card className="space-y-3">
-        <CardTitle>导出备份</CardTitle>
-        <CardDescription>
-          下载包含全部欠款人、债务、账单、流水的 JSON 快照。建议定期导出，防止数据丢失。
-        </CardDescription>
-        <div>
-          <a href="/api/export" download>
-            <Button>下载备份文件</Button>
-          </a>
-        </div>
-      </Card>
+      {canExport && (
+        <Card className="space-y-3">
+          <CardTitle>导出备份</CardTitle>
+          <CardDescription>
+            {isAllScope
+              ? "下载包含全站全部欠款人、债务、账单、流水的 JSON 快照。建议定期导出，防止数据丢失。"
+              : "下载包含您自己名下欠款人、债务、账单、流水的 JSON 快照。"}
+          </CardDescription>
+          <div>
+            <a href="/api/export" download>
+              <Button>下载备份文件</Button>
+            </a>
+          </div>
+        </Card>
+      )}
 
-      {session?.isAdmin && (
+      {canExportSql && (
         <Card className="space-y-3">
           <CardTitle>导出 SQL 数据</CardTitle>
           <CardDescription>
@@ -110,67 +120,74 @@ export function BackupPanel() {
             <a href="/api/export/sql" download>
               <Button variant="secondary">下载 SQL 文件</Button>
             </a>
-            <span className="text-xs text-text-dim">含账号表，仅管理员可导出</span>
+            <span className="text-xs text-text-dim">含账号与角色权限表，仅授权管理员可导出</span>
           </div>
         </Card>
       )}
 
-      <Card className="space-y-3">
-        <CardTitle>导入备份</CardTitle>
-        <CardDescription>
-          从 JSON 快照恢复数据。<span className="text-warning">导入将覆盖当前全部数据</span>
-          ，建议导入前先导出一份当前快照。
-        </CardDescription>
-        <input
-          ref={fileRef}
-          type="file"
-          accept="application/json,.json"
-          className="hidden"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) pickFile(f);
-            e.target.value = "";
-          }}
-        />
-        <div>
-          <Button variant="secondary" onClick={() => fileRef.current?.click()}>
-            选择备份文件
-          </Button>
-        </div>
-
-        {preview && (
-          <div className="rounded-[var(--radius-md)] border border-warning/30 bg-warning/8 p-4 space-y-3">
-            <p className="text-sm font-medium text-warning">备份内容预览</p>
-            <p className="text-sm tnum text-text-dim">
-              {preview.persons} 位欠款人 · {preview.accounts} 个债务账户 · {preview.bills} 期账单 ·{" "}
-              {preview.repayments} 条还款 · {preview.advances} 条垫付
-            </p>
-            <p className="text-xs text-text-dim">导出时间：{new Date(preview.exportedAt).toLocaleString("zh-CN")}</p>
-            <div className="flex items-center gap-2">
-              <Input
-                value={confirmText}
-                onChange={(e) => setConfirmText(e.target.value)}
-                placeholder="输入「确认」二字"
-                className="max-w-44"
-              />
-              <Button variant="danger" onClick={doImport} loading={importing} disabled={confirmText !== "确认"}>
-                覆盖导入
-              </Button>
-              <Button variant="ghost" onClick={() => { setPreview(null); setRawJson(null); }}>
-                取消
-              </Button>
-            </div>
+      {canImport && (
+        <Card className="space-y-3">
+          <CardTitle>导入备份</CardTitle>
+          <CardDescription>
+            从 JSON 快照恢复数据。
+            <span className="text-warning">
+              {isAllScope ? "导入将覆盖全站全部业务数据" : "导入将仅替换您本人名下的数据，不会影响其他客户"}
+            </span>
+            ，建议导入前先导出一份当前快照。
+          </CardDescription>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) pickFile(f);
+              e.target.value = "";
+            }}
+          />
+          <div>
+            <Button variant="secondary" onClick={() => fileRef.current?.click()}>
+              选择备份文件
+            </Button>
           </div>
-        )}
-      </Card>
 
-      <Card className="space-y-3 border-danger/25">
-        <CardTitle className="text-danger">危险区</CardTitle>
-        <CardDescription>清空本地数据库中的全部数据，不可恢复。操作前请务必先导出备份。</CardDescription>
-        <div>
-          <Button variant="danger" onClick={() => setClearOpen(true)}>清空全部数据</Button>
-        </div>
-      </Card>
+          {preview && (
+            <div className="rounded-[var(--radius-md)] border border-warning/30 bg-warning/8 p-4 space-y-3">
+              <p className="text-sm font-medium text-warning">备份内容预览</p>
+              <p className="text-sm tnum text-text-dim">
+                {preview.persons} 位欠款人 · {preview.accounts} 个债务账户 · {preview.bills} 期账单 ·{" "}
+                {preview.repayments} 条还款 · {preview.advances} 条垫付
+              </p>
+              <p className="text-xs text-text-dim">导出时间：{new Date(preview.exportedAt).toLocaleString("zh-CN")}</p>
+              <div className="flex items-center gap-2">
+                <Input
+                  value={confirmText}
+                  onChange={(e) => setConfirmText(e.target.value)}
+                  placeholder="输入「确认」二字"
+                  className="max-w-44"
+                />
+                <Button variant="danger" onClick={doImport} loading={importing} disabled={confirmText !== "确认"}>
+                  覆盖导入
+                </Button>
+                <Button variant="ghost" onClick={() => { setPreview(null); setRawJson(null); }}>
+                  取消
+                </Button>
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {canClearAll && (
+        <Card className="space-y-3 border-danger/25">
+          <CardTitle className="text-danger">危险区</CardTitle>
+          <CardDescription>清空数据库中的全部业务数据，不可恢复。操作前请务必先导出备份。</CardDescription>
+          <div>
+            <Button variant="danger" onClick={() => setClearOpen(true)}>清空全部数据</Button>
+          </div>
+        </Card>
+      )}
 
       <Dialog open={clearOpen} onClose={() => setClearOpen(false)} title="确认清空全部数据？">
         <p className="text-sm text-text-dim">

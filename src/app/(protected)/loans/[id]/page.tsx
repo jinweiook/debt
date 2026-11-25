@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { AppShell, PageHeader } from "@/components/layout/app-shell";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -12,8 +12,10 @@ import { DeleteDebtButton } from "@/components/features/personal/delete-debt-but
 import { RepaymentTable, type RepaymentRow } from "@/components/features/repayment/repayment-table";
 import { getLoanAccountDetail } from "@/server/services/loan-service";
 import { virtualAccruedInterest } from "@/server/services/interest-service";
-import { getAuthContext } from "@/server/lib/auth-context";
+import { findUserById } from "@/server/services/auth-service";
+import { getAuthContext, hasPerm } from "@/server/lib/auth-context";
 import { formatCents } from "@/lib/utils";
+import { formatUserDisplayName } from "@/lib/rbac";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +26,9 @@ export default async function LoanDetailPage({ params }: { params: Promise<{ id:
 
   const auth = await getAuthContext();
   if (!auth) notFound();
+  if (!hasPerm(auth, "debt:read")) {
+    redirect("/");
+  }
 
   let detail;
   try {
@@ -34,6 +39,9 @@ export default async function LoanDetailPage({ params }: { params: Promise<{ id:
 
   const { account, person, bills, repayments, remainingCents } = detail;
   const isInstallment = account.type === "installment";
+  const ownerUser = auth.dataScope === "all" ? await findUserById(person.ownerUserId) : null;
+  const canDeleteDebt = hasPerm(auth, "debt:delete");
+  const canCreateRepay = hasPerm(auth, "repayment:create");
 
   // 统计
   const totalPrincipal = account.principalCents;
@@ -66,7 +74,7 @@ export default async function LoanDetailPage({ params }: { params: Promise<{ id:
         ].filter(Boolean).join(" · ") || undefined}
         back="/loans"
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {isInstallment && (
               <InstallmentAccountActions
                 account={{
@@ -82,7 +90,7 @@ export default async function LoanDetailPage({ params }: { params: Promise<{ id:
                 personId={person.id}
               />
             )}
-            {!isInstallment && (
+            {!isInstallment && canDeleteDebt && (
               <DeleteDebtButton
                 accountId={account.id}
                 personId={person.id}
@@ -91,15 +99,17 @@ export default async function LoanDetailPage({ params }: { params: Promise<{ id:
                 size="md"
               />
             )}
-            <Link
-              href={
-                isInstallment
-                  ? `/repayments/new?personId=${person.id}`
-                  : `/repayments/new?personId=${person.id}&targetType=personal&targetId=${account.id}`
-              }
-            >
-              <Button>记一笔还款</Button>
-            </Link>
+            {canCreateRepay && (
+              <Link
+                href={
+                  isInstallment
+                    ? `/repayments/new?personId=${person.id}`
+                    : `/repayments/new?personId=${person.id}&targetType=personal&targetId=${account.id}`
+                }
+              >
+                <Button>记一笔还款</Button>
+              </Link>
+            )}
           </div>
         }
       />
@@ -112,6 +122,13 @@ export default async function LoanDetailPage({ params }: { params: Promise<{ id:
             {statusBadge}
             <InterestBadge account={account} />
             {account.origin === "advance" && <Badge tone="warning">垫付生成</Badge>}
+            {ownerUser && (
+              <Link href={`/?customerId=${ownerUser.id}`}>
+                <Badge tone="purple" className="cursor-pointer hover:opacity-80">
+                  归属客户：{formatUserDisplayName(ownerUser)}
+                </Badge>
+              </Link>
+            )}
             <Link href={`/persons/${person.id}`} className="text-sm text-text-dim hover:text-accent transition-fast ml-auto">
               欠款人：{person.name} →
             </Link>

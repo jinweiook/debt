@@ -5,7 +5,7 @@ import { SessionProvider } from "@/components/layout/session";
 /**
  * 受保护路由组的会话校验（Node Runtime）。
  * middleware 在 Edge 上只做「签名有效」的粗判断；这里查库精校验
- * users 档案（角色、状态、token_version）。未登录 / 账号被禁用 → 重定向到 /login。
+ * users 档案（角色、状态、token_version、RBAC 权限）。未登录 / 账号被禁用 → 重定向到 /login。
  */
 export default async function ProtectedLayout({ children }: { children: React.ReactNode }) {
   const session = await resolveSession();
@@ -21,8 +21,13 @@ export default async function ProtectedLayout({ children }: { children: React.Re
       user={{
         userId: session.userId,
         username: session.username,
+        displayName: session.displayName,
         role: session.role,
-        isAdmin: session.role === "admin",
+        roles: session.roles,
+        roleNames: session.roleNames,
+        permissions: session.permissions,
+        dataScope: session.dataScope,
+        isAdmin: session.dataScope === "all" || session.roles.includes("admin"),
       }}
     >
       {children}

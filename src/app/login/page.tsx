@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, Suspense } from "react";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -65,10 +64,7 @@ function LoginForm() {
         登录
       </Button>
       <p className="text-xs text-text-dim text-center">
-        还没有账号？
-        <Link href="/register" className="text-accent hover:underline ml-1">
-          注册客户账号
-        </Link>
+        暂未开放自助注册，账号由管理员统一开通与管理
       </p>
     </form>
   );

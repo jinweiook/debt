@@ -53,6 +53,8 @@ export type ActionResult<T> = { ok: true; data: T } | { ok: false; error: Action
 
 export function toActionError(err: unknown): ActionError {
   if (
+    err instanceof UnauthorizedError ||
+    err instanceof ForbiddenError ||
     err instanceof DbUnavailableError ||
     err instanceof ValidationError ||
     err instanceof NotFoundError ||

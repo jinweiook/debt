@@ -3,6 +3,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { MoneyText } from "@/components/ui/money-text";
 import { PersonActions, StopLink } from "./person-actions";
+import type { OwnerSelectOption } from "./person-form";
 import type { Person } from "@/server/db/schema";
 import type { PersonStats } from "@/server/services/stats-service";
 
@@ -10,11 +11,13 @@ export function PersonCard({
   person,
   stats,
   ownerName,
+  customers,
 }: {
   person: Person;
   stats: PersonStats;
   /** 管理员视图下的归属客户名（普通客户不显示） */
   ownerName?: string;
+  customers?: OwnerSelectOption[];
 }) {
   return (
     <Link href={`/persons/${person.id}`}>
@@ -26,7 +29,11 @@ export function PersonCard({
             </span>
             <div className="min-w-0">
               <p className="font-semibold truncate">{person.name}</p>
-              {ownerName ? <p className="text-xs text-text-dim truncate">客户：{ownerName}</p> : person.note && <p className="text-xs text-text-dim truncate">{person.note}</p>}
+              {ownerName ? (
+                <p className="text-xs text-text-dim truncate">客户：{ownerName}</p>
+              ) : (
+                person.note && <p className="text-xs text-text-dim truncate">{person.note}</p>
+              )}
             </div>
           </div>
           {stats.totalOutstanding <= 0 ? (
@@ -50,7 +57,7 @@ export function PersonCard({
           </div>
         </div>
         <StopLink className="mt-3 flex justify-end gap-2 border-t border-border/50 pt-3">
-          <PersonActions person={person} />
+          <PersonActions person={person} customers={customers} />
         </StopLink>
       </Card>
     </Link>

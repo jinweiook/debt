@@ -4,13 +4,14 @@ import { getDb } from "@/server/db/client";
 import { insertAndGetId } from "@/server/db/helpers";
 import { persons, type OwnerId } from "@/server/db/schema";
 import { NotFoundError } from "@/server/lib/errors";
-import { getOrSet, invalidateCache, invalidateNamespace } from "@/server/redis/cache";
+import { getOrSet, invalidateNamespace } from "@/server/redis/cache";
 
 export const personInputSchema = z.object({
   name: z.string().trim().min(1, "姓名不能为空").max(64),
   note: z.string().trim().max(512).optional().or(z.literal("")),
   contact: z.string().trim().max(128).optional().or(z.literal("")),
   defaultRepayDay: z.number().int().min(1).max(31).nullable().optional(),
+  ownerUserId: z.string().uuid().optional(),
 });
 export type PersonInput = z.infer<typeof personInputSchema>;
 
@@ -23,7 +24,7 @@ export function ownerScope(ownerId: OwnerId): string {
 
 /**
  * 按归属列出欠款人。
- * @param ownerId 客户 id（UUID）；null = 管理员，列出全部
+ * @param ownerId 客户 id（UUID）；null = 全局视野，列出全部
  */
 export async function listPersons(ownerId: OwnerId, includeArchived = false) {
   const cacheKey = `${ownerScope(ownerId)}:${includeArchived ? "all" : "active"}`;
@@ -70,19 +71,25 @@ export async function createPerson(input: PersonInput, ownerId: string) {
   return getPerson(id, null);
 }
 
-export async function updatePerson(id: number, input: PersonInput, ownerId: OwnerId) {
+export async function updatePerson(
+  id: number,
+  input: PersonInput,
+  ownerId: OwnerId,
+  newOwnerUserId?: string,
+) {
   const db = getDb();
   await getPerson(id, ownerId);
-  await db
-    .update(persons)
-    .set({
-      name: input.name,
-      note: input.note || null,
-      contact: input.contact || null,
-      defaultRepayDay: input.defaultRepayDay ?? null,
-      updatedAt: new Date(),
-    })
-    .where(eq(persons.id, id));
+  const patch: Record<string, unknown> = {
+    name: input.name,
+    note: input.note || null,
+    contact: input.contact || null,
+    defaultRepayDay: input.defaultRepayDay ?? null,
+    updatedAt: new Date(),
+  };
+  if (newOwnerUserId) {
+    patch.ownerUserId = newOwnerUserId;
+  }
+  await db.update(persons).set(patch).where(eq(persons.id, id));
   await invalidatePersonsCache();
   return getPerson(id, ownerId);
 }

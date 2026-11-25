@@ -17,6 +17,9 @@ const TABLES = [
   "repayments",
   "advances",
   "users",
+  "roles",
+  "role_permissions",
+  "user_roles",
   "login_attempts",
 ] as const;
 

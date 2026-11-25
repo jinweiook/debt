@@ -18,7 +18,13 @@ const interestOptions: { value: InterestType; label: string; desc: string }[] = 
   { value: "annual", label: "年化利息", desc: "按月计提：剩余本金 × 年化 ÷ 12" },
 ];
 
-export function PersonalDebtForm({ persons }: { persons: Person[] }) {
+export function PersonalDebtForm({
+  persons,
+  ownerLabels,
+}: {
+  persons: Person[];
+  ownerLabels?: Record<string, string>;
+}) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { toast } = useToast();
@@ -82,9 +88,28 @@ export function PersonalDebtForm({ persons }: { persons: Person[] }) {
         <Field label="欠款人">
           <Select value={personId} onChange={(e) => setPersonId(e.target.value)}>
             <option value="">请选择</option>
-            {persons.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
+            {ownerLabels
+              ? Object.entries(
+                  persons.reduce<Record<string, Person[]>>((acc, p) => {
+                    const key = p.ownerUserId;
+                    if (!acc[key]) acc[key] = [];
+                    acc[key].push(p);
+                    return acc;
+                  }, {}),
+                ).map(([uid, group]) => (
+                  <optgroup key={uid} label={`客户：${ownerLabels[uid] ?? uid}`}>
+                    {group.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))
+              : persons.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
           </Select>
         </Field>
         <Field label="名称" hint="如：直接借出 / 临时周转">

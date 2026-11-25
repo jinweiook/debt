@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MoneyText } from "@/components/ui/money-text";
+import { usePermission } from "@/components/layout/session";
 import { AdvanceButton } from "./advance-button";
 import { BillEditDialog } from "./bill-edit-dialog";
 import { cn } from "@/lib/utils";
@@ -27,6 +28,9 @@ export function BillTable({
   personId: number;
 }) {
   const [editing, setEditing] = useState<InstallmentBill | null>(null);
+  const canRepay = usePermission("repayment:create");
+  const canAdvance = usePermission("advance:create");
+  const canUpdateDebt = usePermission("debt:update");
 
   return (
     <div className="overflow-x-auto -mx-5 px-5">
@@ -58,20 +62,20 @@ export function BillTable({
                 <td className="py-3 pr-3"><Badge tone={st.tone}>{st.label}</Badge></td>
                 <td className="py-3">
                   <div className="flex justify-end gap-2">
-                    {actionable && (
-                      <>
-                        <Link href={`/repayments/new?personId=${personId}&targetType=bill&targetId=${b.id}`}>
-                          <Button size="sm">记还款</Button>
-                        </Link>
-                        <AdvanceButton
-                          billId={b.id}
-                          personId={personId}
-                          remainingCents={b.totalCents - b.paidCents}
-                          periodLabel={`${account.title} 第${b.periodNo}期`}
-                        />
-                      </>
+                    {actionable && canRepay && (
+                      <Link href={`/repayments/new?personId=${personId}&targetType=bill&targetId=${b.id}`}>
+                        <Button size="sm">记还款</Button>
+                      </Link>
                     )}
-                    {b.status === "pending" && (
+                    {actionable && canAdvance && (
+                      <AdvanceButton
+                        billId={b.id}
+                        personId={personId}
+                        remainingCents={b.totalCents - b.paidCents}
+                        periodLabel={`${account.title} 第${b.periodNo}期`}
+                      />
+                    )}
+                    {b.status === "pending" && canUpdateDebt && (
                       <Button variant="ghost" size="sm" onClick={() => setEditing(b)}>编辑</Button>
                     )}
                   </div>

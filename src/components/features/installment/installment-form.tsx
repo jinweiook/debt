@@ -27,7 +27,14 @@ const DYNAMIC_PLAN_OPTIONS: { value: DynamicPlan; label: string; desc: string }[
   { value: "equalPayment", label: "等额本息", desc: "每月总额固定，利息递减本金递增" },
 ];
 
-export function InstallmentForm({ persons }: { persons: Person[] }) {
+export function InstallmentForm({
+  persons,
+  ownerLabels,
+}: {
+  persons: Person[];
+  /** 全局视野时传入 ownerUserId -> 客户名，用于分组展示欠款人 */
+  ownerLabels?: Record<string, string>;
+}) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { toast } = useToast();
@@ -157,9 +164,28 @@ export function InstallmentForm({ persons }: { persons: Person[] }) {
           <Field label="欠款人">
             <Select value={personId} onChange={(e) => setPersonId(e.target.value)}>
               <option value="">请选择</option>
-              {persons.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
+              {ownerLabels
+                ? Object.entries(
+                    persons.reduce<Record<string, Person[]>>((acc, p) => {
+                      const key = p.ownerUserId;
+                      if (!acc[key]) acc[key] = [];
+                      acc[key].push(p);
+                      return acc;
+                    }, {}),
+                  ).map(([uid, group]) => (
+                    <optgroup key={uid} label={`客户：${ownerLabels[uid] ?? uid}`}>
+                      {group.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))
+                : persons.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
             </Select>
           </Field>
           <Field label="分期名称" hint="如：招行 e 招贷">

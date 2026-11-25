@@ -1,28 +1,62 @@
 import { randomUUID } from "node:crypto";
 import { eq, sql } from "drizzle-orm";
 import { cookies } from "next/headers";
-import { getDb } from "@/server/db/client";
-import { loginAttempts, users } from "@/server/db/schema";
+import { z } from "zod";
+import { getDb, type Db } from "@/server/db/client";
+import { loginAttempts, roles, userRoles, users } from "@/server/db/schema";
 import { SESSION_COOKIE } from "@/lib/auth-cookie";
 import { hashPassword, verifyPassword } from "@/lib/password";
 import { createSessionToken, verifySessionToken } from "@/lib/session-token";
+import type { DataScope, PermissionCode } from "@/lib/rbac";
+import { BusinessRuleError, NotFoundError, ValidationError } from "@/server/lib/errors";
+import { getUserRbac, listActiveAdminUserIds, seedDefaultRbac, setUserRoles } from "./rbac-service";
 
 /**
  * 认证服务（自建，替代原 Supabase Auth）。
  * - 密码：scrypt 哈希存 users.password_hash
  * - 会话：HMAC 签名 cookie（见 src/lib/session-token.ts）
- * - 本服务负责：登录/注册/会话解析、角色/状态查询、登录失败锁定
- * - 业务数据访问仍走 Drizzle，多租户靠 owner_user_id 过滤
+ * - 本服务负责：登录/注册/会话解析、用户增改/启停、登录失败锁定
+ * - 业务数据访问仍走 Drizzle，多租户靠 owner_user_id + RBAC dataScope 过滤
  */
 
 export interface UserSession {
   userId: string;
   username: string;
+  displayName: string | null;
   role: string;
+  roles: string[];
+  roleNames: string[];
+  permissions: PermissionCode[];
+  dataScope: DataScope;
 }
 
 export const MAX_LOGIN_ATTEMPTS = 3;
 export const LOCK_DURATION_SECONDS = 5 * 60; // 5 分钟
+
+const usernameSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .regex(/^[a-z0-9_]{3,32}$/, "账号需为 3-32 位字母、数字或下划线");
+
+export const adminCreateUserSchema = z.object({
+  username: usernameSchema,
+  password: z.string().min(6, "密码长度需为 6-64 位").max(64, "密码长度需为 6-64 位"),
+  displayName: z.string().trim().max(64, "姓名最多 64 字").optional().or(z.literal("")),
+  phone: z.string().trim().max(32, "联系电话最多 32 位").optional().or(z.literal("")),
+  note: z.string().trim().max(512, "备注最多 512 字").optional().or(z.literal("")),
+  status: z.enum(["active", "disabled"]).default("active"),
+  roleIds: z.array(z.number().int().positive()).min(1, "请至少分配一个角色"),
+});
+
+export const adminUpdateUserSchema = z.object({
+  username: usernameSchema,
+  displayName: z.string().trim().max(64, "姓名最多 64 字").optional().or(z.literal("")),
+  phone: z.string().trim().max(32, "联系电话最多 32 位").optional().or(z.literal("")),
+  note: z.string().trim().max(512, "备注最多 512 字").optional().or(z.literal("")),
+  status: z.enum(["active", "disabled"]),
+  roleIds: z.array(z.number().int().positive()).min(1, "请至少分配一个角色"),
+});
 
 /** 按 username 查用户 */
 export async function findUserByUsername(username: string) {
@@ -65,7 +99,11 @@ export async function getLockStatus(username: string): Promise<LockStatus> {
 async function upsertLoginAttempt(username: string, failCount: number, lockedUntil: Date | null): Promise<void> {
   const db = getDb();
   const now = new Date();
-  const [row] = await db.select({ username: loginAttempts.username }).from(loginAttempts).where(eq(loginAttempts.username, username)).limit(1);
+  const [row] = await db
+    .select({ username: loginAttempts.username })
+    .from(loginAttempts)
+    .where(eq(loginAttempts.username, username))
+    .limit(1);
   if (row) {
     await db
       .update(loginAttempts)
@@ -142,7 +180,7 @@ export async function login(
 
   const profile = await findUserByUsername(name);
   if (!profile || profile.status !== "active") {
-    // 用户不存在也走失败计数，避免枚举用户名
+    // 用户不存在或已禁用均走失败计数，避免枚举用户名
     return failureResult(name, "账号或密码不正确");
   }
 
@@ -158,7 +196,10 @@ export async function login(
   return { ok: true, token };
 }
 
-/** 注册新客户账号（role=user），成功后直接返回会话 token（自动登录） */
+/**
+ * 注册新客户账号（role=user）。
+ * 说明：公开注册默认已关闭（由路由与页面拦截）；保留此函数供测试脚本或开关启用时调用。
+ */
 export async function register(
   username: string,
   password: string,
@@ -178,20 +219,133 @@ export async function register(
 
   const db = getDb();
   const userId = randomUUID();
-  await db.insert(users).values({
-    id: userId,
-    username: name,
-    passwordHash: await hashPassword(password),
-    role: "user",
-    status: "active",
-    lastLoginAt: new Date(),
+  const pwdHash = await hashPassword(password);
+  await db.transaction(async (tx) => {
+    await tx.insert(users).values({
+      id: userId,
+      username: name,
+      passwordHash: pwdHash,
+      role: "user",
+      status: "active",
+      lastLoginAt: new Date(),
+    });
+    const [userRoleRow] = await tx.select({ id: roles.id }).from(roles).where(eq(roles.code, "user")).limit(1);
+    if (userRoleRow) {
+      await tx.insert(userRoles).values({ userId, roleId: userRoleRow.id });
+    }
   });
 
   const token = await createSessionToken(userId, 0);
   return { ok: true, token, userId };
 }
 
-/** 从会话 cookie 解析当前用户；校验签名、状态与 token_version */
+/** 管理员后台新建用户（含扩展资料与 RBAC 角色绑定） */
+export async function createUserByAdmin(rawInput: unknown): Promise<{ id: string; username: string }> {
+  const parsed = adminCreateUserSchema.parse(rawInput);
+  const existing = await findUserByUsername(parsed.username);
+  if (existing) {
+    throw new BusinessRuleError(`账号「${parsed.username}」已存在`);
+  }
+
+  const db = getDb();
+  const userId = randomUUID();
+  const pwdHash = await hashPassword(parsed.password);
+  const now = new Date();
+
+  await db.transaction(async (tx) => {
+    await tx.insert(users).values({
+      id: userId,
+      username: parsed.username,
+      displayName: parsed.displayName || null,
+      phone: parsed.phone || null,
+      note: parsed.note || null,
+      passwordHash: pwdHash,
+      role: "user",
+      status: parsed.status,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const { primaryRole } = await setUserRoles(tx as unknown as Db, userId, parsed.roleIds);
+    await tx.update(users).set({ role: primaryRole }).where(eq(users.id, userId));
+  });
+
+  return { id: userId, username: parsed.username };
+}
+
+/** 管理员后台编辑用户（含防自锁、角色变更、禁用踢下线） */
+export async function updateUserByAdmin(
+  targetUserId: string,
+  rawInput: unknown,
+  operatorUserId: string,
+): Promise<void> {
+  const parsed = adminUpdateUserSchema.parse(rawInput);
+  const db = getDb();
+  const [target] = await db.select().from(users).where(eq(users.id, targetUserId)).limit(1);
+  if (!target) throw new NotFoundError("用户不存在");
+
+  if (parsed.username !== target.username) {
+    const dup = await findUserByUsername(parsed.username);
+    if (dup && dup.id !== targetUserId) {
+      throw new BusinessRuleError(`账号「${parsed.username}」已被占用`);
+    }
+  }
+
+  const currentRbac = await getUserRbac(targetUserId, target.role);
+  const targetWasAdmin = currentRbac.roles.includes("admin");
+
+  await db.transaction(async (tx) => {
+    const txDb = tx as unknown as Db;
+    // 预检验所选角色
+    const { primaryRole, roleCodes } = await setUserRoles(txDb, targetUserId, parsed.roleIds);
+    const willBeAdmin = roleCodes.includes("admin");
+
+    if (targetUserId === operatorUserId) {
+      if (parsed.status !== "active") {
+        throw new BusinessRuleError("不能禁用当前正在使用的管理员账号");
+      }
+      if (targetWasAdmin && !willBeAdmin) {
+        throw new BusinessRuleError("不能移除自己的超级管理员角色");
+      }
+    }
+
+    if (targetWasAdmin && (!willBeAdmin || parsed.status !== "active")) {
+      const activeAdmins = await listActiveAdminUserIds(txDb);
+      const remainingAdmins = activeAdmins.filter((id) => id !== targetUserId);
+      if (remainingAdmins.length === 0) {
+        throw new BusinessRuleError("系统中至少需要保留一个启用状态的超级管理员账号");
+      }
+    }
+
+    const prevRoleIds = [...currentRbac.roleIds].sort((a, b) => a - b).join(",");
+    const nextRoleIds = [...new Set(parsed.roleIds)].sort((a, b) => a - b).join(",");
+    const rolesChanged = prevRoleIds !== nextRoleIds;
+    const disabledNow = parsed.status === "disabled" && target.status !== "disabled";
+    const needBumpToken = disabledNow || rolesChanged || parsed.username !== target.username;
+
+    await tx
+      .update(users)
+      .set({
+        username: parsed.username,
+        displayName: parsed.displayName || null,
+        phone: parsed.phone || null,
+        note: parsed.note || null,
+        role: primaryRole,
+        status: parsed.status,
+        tokenVersion: needBumpToken ? sql`${users.tokenVersion} + 1` : target.tokenVersion,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, targetUserId));
+  });
+
+  if (parsed.username !== target.username) {
+    await clearLoginFailures(target.username);
+  }
+  if (parsed.status === "active" && target.status === "disabled") {
+    await clearLoginFailures(parsed.username);
+  }
+}
+
+/** 从会话 cookie 解析当前用户；校验签名、状态、token_version 与 RBAC 权限 */
 export async function resolveSession(): Promise<UserSession | null> {
   const jar = await cookies();
   const payload = await verifySessionToken(jar.get(SESSION_COOKIE)?.value);
@@ -201,20 +355,30 @@ export async function resolveSession(): Promise<UserSession | null> {
   if (!profile || profile.status !== "active") return null;
   if (profile.tokenVersion !== payload.tv) return null;
 
-  return { userId: profile.id, username: profile.username, role: profile.role };
+  const rbac = await getUserRbac(profile.id, profile.role);
+  return {
+    userId: profile.id,
+    username: profile.username,
+    displayName: profile.displayName ?? null,
+    role: profile.role,
+    roles: rbac.roles,
+    roleNames: rbac.roleNames,
+    permissions: rbac.permissions,
+    dataScope: rbac.dataScope,
+  };
 }
 
 /**
  * 管理员重置指定用户密码：改哈希 + token_version+1（踢掉旧会话）+ 清登录锁定。
- * 调用方需先校验操作者是 admin。
+ * 调用方需先校验权限。
  */
 export async function resetUserPassword(targetUserId: string, newPassword: string): Promise<void> {
   if (newPassword.length < 6 || newPassword.length > 64) {
-    throw new Error("密码长度需为 6-64 位");
+    throw new ValidationError("密码长度需为 6-64 位");
   }
   const db = getDb();
   const [target] = await db.select().from(users).where(eq(users.id, targetUserId)).limit(1);
-  if (!target) throw new Error("用户不存在");
+  if (!target) throw new NotFoundError("用户不存在");
   await db
     .update(users)
     .set({
@@ -227,28 +391,29 @@ export async function resetUserPassword(targetUserId: string, newPassword: strin
 }
 
 /**
- * 初始化默认管理员：users 表为空时创建（本地 scrypt 哈希，无外部依赖）。
+ * 初始化默认管理员并确保 RBAC 角色与存量用户绑定就绪。
  * @param overrideDb 可选：外部传入的 db 实例（init-db 脚本会传，避免重复连接）
  */
-export async function seedDefaultAdmin(
-  overrideDb?: ReturnType<typeof import("@/server/db/client").getDb>,
-): Promise<void> {
+export async function seedDefaultAdmin(overrideDb?: Db): Promise<void> {
   const db = overrideDb ?? getDb();
   const [existing] = await db.select({ id: users.id }).from(users).limit(1);
-  if (existing) return;
+  if (!existing) {
+    const adminUsername = (process.env.ADMIN_USERNAME || "admin").toLowerCase();
+    const adminPassword = process.env.ADMIN_PASSWORD || "456123";
 
-  const adminUsername = (process.env.ADMIN_USERNAME || "admin").toLowerCase();
-  const adminPassword = process.env.ADMIN_PASSWORD || "456123";
+    await db.insert(users).values({
+      id: randomUUID(),
+      username: adminUsername,
+      displayName: "系统管理员",
+      passwordHash: await hashPassword(adminPassword),
+      role: "admin",
+      status: "active",
+    });
 
-  await db.insert(users).values({
-    id: randomUUID(),
-    username: adminUsername,
-    passwordHash: await hashPassword(adminPassword),
-    role: "admin",
-    status: "active",
-  });
+    console.log(`[seedDefaultAdmin] 已创建默认管理员: ${adminUsername}`);
+  }
 
-  console.log(`[seedDefaultAdmin] 已创建默认管理员: ${adminUsername}`);
+  await seedDefaultRbac(db);
 }
 
 function formatDuration(seconds: number): string {

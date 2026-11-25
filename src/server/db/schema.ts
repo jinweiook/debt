@@ -16,6 +16,9 @@ export const repayments = s.repayments as unknown as typeof pg.repayments;
 export const advances = s.advances as unknown as typeof pg.advances;
 export const users = s.users as unknown as typeof pg.users;
 export const loginAttempts = s.loginAttempts as unknown as typeof pg.loginAttempts;
+export const roles = s.roles as unknown as typeof pg.roles;
+export const rolePermissions = s.rolePermissions as unknown as typeof pg.rolePermissions;
+export const userRoles = s.userRoles as unknown as typeof pg.userRoles;
 
 /**
  * 归属维度类型：普通客户 = 自己的 users.id（UUID）；管理员 = null（不过滤，看全部）
@@ -28,3 +31,6 @@ export type InstallmentBill = typeof pg.installmentBills.$inferSelect;
 export type Repayment = typeof pg.repayments.$inferSelect;
 export type Advance = typeof pg.advances.$inferSelect;
 export type User = typeof pg.users.$inferSelect;
+export type Role = typeof pg.roles.$inferSelect;
+export type RolePermission = typeof pg.rolePermissions.$inferSelect;
+export type UserRole = typeof pg.userRoles.$inferSelect;

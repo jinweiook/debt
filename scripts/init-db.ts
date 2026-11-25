@@ -11,6 +11,7 @@ config();
 
 import { isMysql } from "../src/server/db/dialect";
 import { seedDefaultAdmin } from "../src/server/services/auth-service";
+import { seedDefaultRbac } from "../src/server/services/rbac-service";
 
 async function main() {
   if (isMysql()) {
@@ -22,6 +23,7 @@ async function main() {
 
   // seedDefaultAdmin 走 getDb() 单例（与迁移同一方言配置）
   await seedDefaultAdmin();
+  await seedDefaultRbac();
 
   const { closeDb } = await import("../src/server/db/client");
   await closeDb();

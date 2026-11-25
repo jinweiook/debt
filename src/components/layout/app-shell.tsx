@@ -4,15 +4,53 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { useSession } from "@/components/layout/session";
+import { hasAnyPermission, hasPermission, shortUserDisplayName, type PermissionCode } from "@/lib/rbac";
 
-const navItems = [
-  { href: "/", label: "总览", icon: IconHome },
-  { href: "/loans", label: "借贷款", icon: IconLoan },
-  { href: "/repayments/new", label: "记还款", icon: IconPlus },
-  { href: "/settings/backup", label: "备份", icon: IconDatabase },
+interface NavItem {
+  href: string;
+  label: string;
+  icon: (props: { className?: string }) => React.ReactNode;
+  show: (perms: readonly PermissionCode[]) => boolean;
+}
+
+const allNavItems: NavItem[] = [
+  {
+    href: "/",
+    label: "总览",
+    icon: IconHome,
+    show: (p) => hasPermission(p, "overview:read"),
+  },
+  {
+    href: "/loans",
+    label: "借贷款",
+    icon: IconLoan,
+    show: (p) => hasPermission(p, "debt:read"),
+  },
+  {
+    href: "/repayments/new",
+    label: "记还款",
+    icon: IconPlus,
+    show: (p) => hasPermission(p, "repayment:create"),
+  },
+  {
+    href: "/settings/backup",
+    label: "备份",
+    icon: IconDatabase,
+    show: (p) => hasAnyPermission(p, ["backup:export", "backup:import", "backup:export_sql", "backup:clear_all"]),
+  },
+  {
+    href: "/admin/customers",
+    label: "客户管理",
+    icon: IconUsers,
+    show: (p) => hasPermission(p, "user:read"),
+  },
+  {
+    href: "/admin/roles",
+    label: "角色权限",
+    icon: IconShield,
+    show: (p) => hasPermission(p, "role:manage"),
+  },
 ];
-
-const adminNavItems = [{ href: "/admin/customers", label: "客户管理", icon: IconUsers }];
 
 function IconLoan({ className }: { className?: string }) {
   return (
@@ -57,14 +95,31 @@ function IconUsers({ className }: { className?: string }) {
     </svg>
   );
 }
+function IconShield({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
+      <path d="M12 3 4.5 6.2v5.4c0 4.7 3.2 8.9 7.5 10.1 4.3-1.2 7.5-5.4 7.5-10.1V6.2L12 3Z" strokeLinejoin="round" />
+      <path d="m9.2 12.2 2 2 3.8-4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const session = useSession();
-  const nav = session?.isAdmin ? [...navItems, ...adminNavItems] : navItems;
+
+  const perms = session?.permissions ?? [];
+  const nav = session ? allNavItems.filter((item) => item.show(perms)) : [];
 
   const isActive = (href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href));
+  const displayName = session ? shortUserDisplayName(session) : "";
+  const roleLabel =
+    session && session.roleNames.length > 0
+      ? `${session.roleNames.join(" / ")}${session.dataScope === "all" ? " · 全部" : ""}`
+      : session?.isAdmin
+        ? "管理员 · 全部"
+        : "客户";
 
   return (
     <div className="min-h-dvh md:flex">
@@ -97,11 +152,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           {session && (
             <div className="flex items-center gap-2 px-3.5 py-2 rounded-[var(--radius-md)] bg-surface-2/60 border border-border">
               <span className="h-7 w-7 shrink-0 rounded-full gradient-card border border-accent-2/30 flex items-center justify-center text-xs font-bold text-accent-2">
-                {session.username.slice(0, 1).toUpperCase()}
+                {displayName.slice(0, 1).toUpperCase()}
               </span>
               <div className="min-w-0">
-                <p className="text-sm font-medium truncate">{session.username}</p>
-                <p className="text-[11px] text-text-dim">{session.isAdmin ? "管理员 · 可见全部" : "客户"}</p>
+                <p className="text-sm font-medium truncate">{displayName}</p>
+                <p className="text-[11px] text-text-dim truncate">{roleLabel}</p>
               </div>
             </div>
           )}
@@ -127,18 +182,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </main>
 
       {/* 移动端底部 Tab */}
-      <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 glass !rounded-none border-x-0 border-b-0 px-6 py-2 flex justify-around">
+      <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 glass !rounded-none border-x-0 border-b-0 px-3 py-2 flex justify-around overflow-x-auto">
         {nav.map((item) => (
           <Link
             key={item.href}
             href={item.href}
             className={cn(
-              "flex flex-col items-center gap-1 py-1.5 px-3 min-w-16 transition-fast",
+              "flex flex-col items-center gap-1 py-1.5 px-2 min-w-14 shrink-0 transition-fast",
               isActive(item.href) ? "text-accent" : "text-text-dim",
             )}
           >
-            <item.icon className="h-5.5 w-5.5" />
-            <span className="text-[11px] font-medium">{item.label}</span>
+            <item.icon className="h-5 w-5" />
+            <span className="text-[11px] font-medium whitespace-nowrap">{item.label}</span>
           </Link>
         ))}
       </nav>

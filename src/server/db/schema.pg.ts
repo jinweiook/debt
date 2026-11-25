@@ -153,8 +153,11 @@ export const users = pgTable(
   {
     id: uuid("id").primaryKey(),
     username: varchar("username", { length: 64 }).notNull(),
+    displayName: varchar("display_name", { length: 64 }),
+    phone: varchar("phone", { length: 32 }),
+    note: varchar("note", { length: 512 }),
     passwordHash: varchar("password_hash", { length: 255 }).notNull(),
-    // admin = 管理员（可查看所有客户账单）；user = 注册客户（只能查看自己的账单）
+    // 冗余主角色编码（兼容字段），实际权限由 user_roles + role_permissions 决定
     role: varchar("role", { length: 16 }).notNull().default("user"),
     status: varchar("status", { length: 16 }).notNull().default("active"), // active / disabled
     lastLoginAt: timestamp("last_login_at", { mode: "date", precision: 3 }),
@@ -165,6 +168,51 @@ export const users = pgTable(
   (t) => [
     uniqueIndex("uk_users_username").on(t.username),
     index("idx_users_status").on(t.status),
+  ],
+);
+
+/** RBAC 角色定义 */
+export const roles = pgTable(
+  "roles",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    code: varchar("code", { length: 32 }).notNull(),
+    name: varchar("name", { length: 64 }).notNull(),
+    description: varchar("description", { length: 255 }),
+    // all = 查看并管理全部客户账单；self = 仅管理自己名下账单
+    dataScope: varchar("data_scope", { length: 16 }).notNull().default("self"),
+    isSystem: smallint("is_system").notNull().default(0),
+    createdAt: timestamp("created_at", { mode: "date", precision: 3 }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { mode: "date", precision: 3 }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("uk_roles_code").on(t.code)],
+);
+
+/** RBAC 角色权限映射 */
+export const rolePermissions = pgTable(
+  "role_permissions",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    roleId: bigint("role_id", { mode: "number" }).notNull(),
+    permissionCode: varchar("permission_code", { length: 64 }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("uk_role_perm").on(t.roleId, t.permissionCode),
+    index("idx_role_perm_role").on(t.roleId),
+  ],
+);
+
+/** RBAC 用户角色关联 */
+export const userRoles = pgTable(
+  "user_roles",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    userId: uuid("user_id").notNull(),
+    roleId: bigint("role_id", { mode: "number" }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("uk_user_role").on(t.userId, t.roleId),
+    index("idx_user_role_user").on(t.userId),
   ],
 );
 

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
+import { usePermission } from "@/components/layout/session";
 import { InstallmentEditDialog } from "./installment-edit-dialog";
 import { deleteDebtAccountsAction } from "@/server/actions/debt-actions";
 
@@ -27,8 +28,12 @@ export function InstallmentAccountActions({
 }) {
   const router = useRouter();
   const { toast } = useToast();
+  const canUpdate = usePermission("debt:update");
+  const canDelete = usePermission("debt:delete");
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+
+  if (!canUpdate && !canDelete) return null;
 
   const doDelete = async () => {
     const res = await deleteDebtAccountsAction([account.id], personId);
@@ -42,8 +47,8 @@ export function InstallmentAccountActions({
 
   return (
     <>
-      <Button variant="secondary" size="sm" onClick={() => setEditOpen(true)}>编辑分期</Button>
-      <Button variant="ghost" size="sm" onClick={() => setDeleteOpen(true)}>整批删除</Button>
+      {canUpdate && <Button variant="secondary" size="sm" onClick={() => setEditOpen(true)}>编辑分期</Button>}
+      {canDelete && <Button variant="ghost" size="sm" onClick={() => setDeleteOpen(true)}>整批删除</Button>}
 
       <InstallmentEditDialog account={account} personId={personId} open={editOpen} onClose={() => setEditOpen(false)} />
 

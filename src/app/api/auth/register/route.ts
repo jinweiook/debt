@@ -6,6 +6,13 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
+  if (process.env.ALLOW_PUBLIC_REGISTER !== "true") {
+    return NextResponse.json(
+      { ok: false, message: "当前未开放自助注册，请联系管理员创建账号" },
+      { status: 403 },
+    );
+  }
+
   try {
     const body = await req.json();
     const username = String(body.username ?? "");
